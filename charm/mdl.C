@@ -772,7 +772,7 @@ AMdl::waitReply(int id)
 	idReplyWait = id;
 	CthSuspend();
 	}
-    assert(msgReply[id]);
+    assert(msgReply[id] != NULL);
     threadGetReply = 0;
     msgTmp = msgReply[id];
     msgReply[id] = NULL;
@@ -810,7 +810,7 @@ AMdl::waitSrvStop()
 void
 AMdl::stopSrv()
 {
-    assert(threadSrvWait);
+    assert(threadSrvWait != NULL);
     CthAwaken(threadSrvWait);
     }
 
@@ -973,7 +973,7 @@ grpCache::waitCache(int iRank)
 	CmiUnlock(lock);	
 	CthSuspend();
 	}
-    assert(msgCache[iRank]);
+    assert(msgCache[iRank] != NULL);
     threadCache[iRank] = 0;
     msgTmp = msgCache[iRank];
     msgCache[iRank] = NULL;
@@ -1219,7 +1219,7 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 void
 AMdl::barrierRel()
 {
-    assert(threadBarrier);
+    assert(threadBarrier != 0);
     
     CthAwaken(threadBarrier);
     threadBarrier = 0;
@@ -1319,8 +1319,8 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 {
 	CProxy_grpCache proxyCache(CacheId);
 
-	assert(init);
-	assert(combine);
+	assert(init != NULL);
+	assert(combine != NULL);
 	proxyCache.ckLocalBranch()->CacheInitialize(cid, pData, iDataSize,
 						    nData, init, combine,
 						    mdl->pSelf->iMyRank,
@@ -1441,7 +1441,7 @@ void mdlFinishCache(MDL mdl,int cid)
 extern "C"
 void mdlCacheCheck(MDL mdl)
 {
-    // int dummy = CmiDeliverMsgs(0);
+    int dummy = CmiDeliverMsgs(0);
     // CthYield();
     
     }
