@@ -629,10 +629,6 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		return(0);
 	case MDL_MID_CACHEFLSH:
 		assert(c->iType == MDL_COCACHE);
-		/*
-		 ** Unpack the data into the 'sentinel-line' cache data.
-		 */
-		for (i=0;i<c->iLineSize;++i) c->pLine[i] = pszRcv[i];
 		i = ph->iLine*MDL_CACHELINE_ELTS;
 		t = &c->pData[i*c->iDataSize];
 		/*
@@ -643,7 +639,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		n -= i;
 		n *= c->iDataSize;
 		for (i=0;i<n;i+=c->iDataSize) {
-			(*c->combine)(&t[i],&c->pLine[i]);
+			(*c->combine)(&t[i],&pszRcv[i]);
 			}
 		return(0);
 		}
