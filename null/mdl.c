@@ -206,6 +206,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 			int *pnSndBytes,int *pnRcvBytes)
 {
 	assert(0);
+	return 0;
 	}
 
 
@@ -536,6 +537,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		return(&c->pData[iIndex*c->iDataSize]);
 		}
 	assert(0);
+	return NULL;
 	}
 
 
