@@ -4,6 +4,10 @@
 #include <assert.h>
 #include <mpi.h>
 
+#ifdef __osf__
+#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
+#endif
+
 
 #define SRV_STOP		0
 

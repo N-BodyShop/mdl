@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <assert.h>
 
+#ifdef __osf__
+#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
+#endif
+
 #define SRV_STOP		0
 
 typedef struct cacheSpace {
@@ -78,7 +82,9 @@ typedef struct mdlContext {
  * Timer functions active: define MDLTIMER
  * Makes mdl timer functions active
  */
+#ifndef _CRAYMPP
 #define MDLTIMER
+#endif
 
 
 void mdlprintf( MDL mdl, const char *format, ... );

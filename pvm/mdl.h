@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <assert.h>
 
+#ifdef __osf__
+#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
+#endif
+
 #define SRV_STOP		0
 
 #define MDL_CACHE_SIZE		2000000

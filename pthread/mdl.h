@@ -4,6 +4,10 @@
 #include <pthread.h>
 #include <assert.h>
 
+#ifdef __osf__
+#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
+#endif
+
 #define MDL_CACHE_SIZE		2000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)

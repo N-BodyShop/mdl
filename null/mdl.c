@@ -32,10 +32,14 @@ void _srvNull(void *p1,void *vin,int nIn,void *vout,int *pnOut)
 
 double mdlCpuTimer(MDL mdl)
 {
+#ifndef _CRAYMPP
 	struct rusage ru;
 
 	getrusage(0,&ru);
 	return((double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec);
+#else
+	return 0.0;
+#endif
 	}
 
 /* 

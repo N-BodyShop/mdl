@@ -4,6 +4,10 @@
 #include <assert.h>
 #include <mpi.h>
 
+#ifdef __osf__
+#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
+#endif
+
 
 #define SRV_STOP		0
 
@@ -124,7 +128,6 @@ typedef struct mdlContext {
  * Timer functions active: define MDLTIMER
  * Makes mdl timer functions active
  */
-#define MDLTIMER
 
 
 void mdlprintf( MDL mdl, const char *format, ... );
