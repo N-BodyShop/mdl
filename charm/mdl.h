@@ -110,14 +110,14 @@ void mdlHandler(MDL);
 /*
  ** Caching functions.
  */
-void *mdlMalloc(MDL,int);
+void *mdlMalloc(MDL,size_t);
 void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
 void mdlFinishCache(MDL,int);
 
-// #define mdlCacheCheck(MDL) 
+/* #define mdlCacheCheck(MDL)  */
 void mdlCacheCheck(MDL);
 
 void *mdlAquire(MDL,int,int,int);

@@ -1066,7 +1066,7 @@ AMdl::CacheFlushAll(MdlCacheFlshMsg *mesg)
  ** T3D and perhaps some future machines these functions are required.
  */
 extern "C"
-void *mdlMalloc(MDL mdl,int iSize)
+void *mdlMalloc(MDL mdl,size_t iSize)
 {	
 	return(malloc(iSize));
 	}
