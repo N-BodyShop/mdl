@@ -196,7 +196,6 @@ public:
 	int id;
 	char *pszOut;
 	char *pszIn;
-	MdlSwapMsg *msgTmp;
 	int done;
 	} swapData;
     CthThreadStruct * threadSrvWait;
