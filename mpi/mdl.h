@@ -6,14 +6,14 @@
 
 #define SRV_STOP		0
 
-#define MDL_CACHE_SIZE		1000000
+#define MDL_CACHE_SIZE		2000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
+#define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
 
 typedef struct cacheTag {
 	int iKey;
-	int id;
 	int nLock;
 	int nLast;
 	int iLink;
@@ -40,6 +40,7 @@ typedef struct cacheSpace {
 	int nLines;
 	int nTrans;
 	int iTransMask;
+        int iKeyShift;
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
