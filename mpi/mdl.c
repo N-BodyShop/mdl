@@ -543,6 +543,7 @@ void mdlHandler(MDL mdl)
 #define MDL_MID_CACHERPL	3
 #define MDL_MID_CACHEOUT	4
 #define MDL_MID_CACHEFLSH	5
+#define MDL_MID_CACHEDONE	6
 
 #define MDL_CHECK_MASK  	0x7f
 #define BILLION				1000000000
@@ -558,20 +559,26 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	int id, iTag;
 	int n,i;
 	MPI_Status status;
+	int ret;
+	char achDiag[256];
 
-	id = MPI_ANY_SOURCE;
-	iTag = MDL_TAG_CACHECOM;
-	MPI_Recv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, id,
-		 iTag, MPI_COMM_WORLD, &status);
+	MPI_Wait(&mdl->ReqRcv, &status);
+#if 0
+	sprintf(achDiag, "%d: cache %d, message %d rec top\n", mdl->idSelf,
+		ph->cid, ph->mid);
+	mdlDiag(mdl, achDiag);
+#endif
 
 	c = &mdl->cache[ph->cid];
 	switch (ph->mid) {
 	case MDL_MID_CACHEIN:
 		++c->nCheckIn;
-		return(0);
+		ret = 0;
+		break;
 	case MDL_MID_CACHEOUT:
 		++c->nCheckOut;
-		return(0);
+		ret = 0;
+		break;
 	case MDL_MID_CACHEREQ:
 		/*
 		 ** This is the tricky part! Here is where the real deadlock
@@ -591,7 +598,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		MPI_Isend(phRpl,sizeof(CAHEAD)+c->iLineSize,MPI_BYTE,
 			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD,
 			  &mdl->pReqRpl[ph->id]); 
-		return(0);
+		ret = 0;
+		break;
 	case MDL_MID_CACHEFLSH:
 		assert(c->iType == MDL_COCACHE);
 		/*
@@ -610,7 +618,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		for (i=0;i<n;i+=c->iDataSize) {
 			(*c->combine)(&t[i],&c->pLine[i]);
 			}
-		return(0);
+		ret = 0;
+		break;
 	case MDL_MID_CACHERPL:
 		/*
 		 ** For now assume no prefetching!
@@ -628,9 +637,32 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 				(*c->init)(&pLine[i]);
 				}
 			}
-		return(1);
+		ret = 1;
+		break;
+	case MDL_MID_CACHEDONE:
+	      /*
+	       * No more caches, shouldn't get here.
+	       */
+		assert(0);
+		break;
+	default:
+		assert(0);
 		}
-	assert(0);
+
+#if 0
+	sprintf(achDiag, "%d: cache %d, message %d rec bottom\n", mdl->idSelf,
+		ph->cid, ph->mid);
+	mdlDiag(mdl, achDiag);
+#endif
+	/*
+	 * Fire up next receive
+	 */
+	id = MPI_ANY_SOURCE;
+	iTag = MDL_TAG_CACHECOM;
+	MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, id,
+		 iTag, MPI_COMM_WORLD, &mdl->ReqRcv);
+
+	return ret;
 	}
 
 
@@ -657,6 +689,19 @@ void AdjustDataSize(MDL mdl)
 		 ** here will cause problems, make sure to take this into account!
 		 ** This is certainly true in using the MPL library.
 		 */
+		MPI_Status status;
+		CAHEAD caOut;
+
+		/* cancel outstanding receive by sending a message to
+		   myself */
+
+		caOut.cid = 0;
+		caOut.mid = MDL_MID_CACHEDONE;
+		caOut.id = mdl->idSelf;
+		MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, mdl->idSelf,
+			 MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		MPI_Wait(&mdl->ReqRcv, &status);
+
 		mdl->iMaxDataSize = iMaxDataSize;
 		mdl->iCaBufSize = sizeof(CAHEAD) + 
 			iMaxDataSize*(1 << MDL_CACHELINE_BITS);
@@ -668,6 +713,13 @@ void AdjustDataSize(MDL mdl)
 			}
 		mdl->pszFlsh = realloc(mdl->pszFlsh,mdl->iCaBufSize);
 		assert(mdl->pszFlsh != NULL);
+		
+		/*
+		 * Fire up receive again.
+		 */
+		MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE,
+			  MPI_ANY_SOURCE, MDL_TAG_CACHECOM,
+			  MPI_COMM_WORLD, &mdl->ReqRcv);
 		}
 	}
 
@@ -698,11 +750,30 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 {
 	CACHE *c;
 	int i,nMaxCacheIds;
+	int first;
 
 	/*
 	 ** Allocate more cache spaces if required!
 	 */
 	assert(cid >= 0);
+	/*
+	 * first cache?
+	 */
+	first = 1;
+	for(i = 0; i < mdl->nMaxCacheIds; ++i) {
+	    if(mdl->cache[i].iType != MDL_NOCACHE) {
+		first = 0;
+		break;
+		}
+	    }
+	if(first) {
+	    /*
+	     * Fire up first receive
+	     */
+	    MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, MPI_ANY_SOURCE,
+		      MDL_TAG_CACHECOM, MPI_COMM_WORLD, &mdl->ReqRcv);
+	    }
+	
 	if (cid >= mdl->nMaxCacheIds) {
 		/*
 		 ** reallocate cache spaces, adding space for 2 new cache spaces
@@ -790,6 +861,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	CACHE *c;
 	int id;
 	CAHEAD caIn;
+	char achDiag[256];
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_ROCACHE;
@@ -798,6 +870,8 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	 */
 	c->init = NULL;
 	c->combine = NULL;
+	sprintf(achDiag, "%d: before CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!
 	 */
@@ -818,6 +892,8 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
+	sprintf(achDiag, "%d: In CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
 		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
@@ -830,6 +906,8 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 		    mdlCacheReceive(mdl,NULL);
 		    }	
 	    }	
+	sprintf(achDiag, "%d: After CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
 	AdjustDataSize(mdl);
 	}
 
@@ -891,6 +969,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	int i,id;
 	char *t;
 	int j, iKey;
+	int last;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
@@ -952,19 +1031,42 @@ void mdlFinishCache(MDL mdl,int cid)
 	free(c->pbKey);
 	free(c->pLine);
 	c->iType = MDL_NOCACHE;
+	  
 	AdjustDataSize(mdl);
+	/*
+	 * last cache?
+	 */
+	last = 1;
+	for(i = 0; i < mdl->nMaxCacheIds; ++i) {
+	    if(mdl->cache[i].iType != MDL_NOCACHE) {
+		last = 0;
+		break;
+		}
+	    }
+	/*
+	 * shut down CacheReceive.
+	 * Note: I'm sending a message to myself.
+	 */
+	if(last) {
+	    MPI_Status status;
+	  
+	    caOut.cid = cid;
+	    caOut.mid = MDL_MID_CACHEDONE;
+	    caOut.id = mdl->idSelf;
+	    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, mdl->idSelf,
+		     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+	    MPI_Wait(&mdl->ReqRcv, &status);
+	    }
 	}
 
 
 void mdlCacheCheck(MDL mdl)
 {
-    int iTag,id,flag;
+    int flag;
     MPI_Status status;
 
     while (1) {
-	id = MPI_ANY_SOURCE;
-	iTag = MDL_TAG_CACHECOM;
-	MPI_Iprobe(id, iTag, MPI_COMM_WORLD, &flag, &status);
+	MPI_Test(&mdl->ReqRcv, &flag, &status);
 	if(flag == 0)
 	    break;
 	mdlCacheReceive(mdl,NULL);

@@ -98,6 +98,7 @@ typedef struct mdlContext {
 	char *pszRcv;
 	int *pmidRpl;
 	MPI_Request *pReqRpl;
+	MPI_Request ReqRcv;
 	char **ppszRpl;
 	char *pszFlsh;
 	int nMaxCacheIds;
