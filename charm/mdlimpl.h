@@ -34,6 +34,8 @@ typedef struct cacheHeader {
     int cid;	// Which cache
     int rid;	// proc. id to which request is being made
     int id; 	// id of requesting processor
+    int iNode;  // node of requesting processor
+    int iPe;    // PE of requesting processor
     int iLine;
     } CAHEAD;
 
@@ -158,7 +160,7 @@ class grpCache : public NodeGroup
     void AdjustDataSize();
     void CacheRequest(MdlCacheMsg *mesg);
     void CacheReply(MdlCacheMsg *mesg);
-    MdlCacheMsg *waitCache(int) ;
+    MdlCacheMsg *waitCache(int iRank) ;
     void flushreply();
     void waitflush();
     void FinishCache(int cid);
@@ -167,6 +169,8 @@ class grpCache : public NodeGroup
 void mdlSetup(MDL *pmdl, int bDiag, const char *);
 
 PUPbytes(void *);
+
+class treeMap;
 
 // class AMdl : public ArrayElement1D
 class AMdl : public CBase_AMdl
@@ -194,6 +198,7 @@ public:
     int idReplyWait;
     int nInBar;
     int nFlush;
+    treeMap *procMap;
     
     MDL mdl;
     AMdl(int bDiag, const std::string& progname);
