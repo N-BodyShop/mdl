@@ -1245,8 +1245,10 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 			}
 		}
 
-	if(caFlsh)
+	if(caFlsh) {
+	    mdlCacheCheck(mdl); /* should help avoid deadlocks */
 	    MPI_Wait(&reqFlsh, &status);
+	    }
 	return(&pLine[iElt*c->iDataSize]);
 	}
 
