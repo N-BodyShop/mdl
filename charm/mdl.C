@@ -584,6 +584,7 @@ AMdl::swapInit(int nInBytes, int nBufBytes)
 {
     swapData.nInBytes = nInBytes;
     swapData.nOutBufBytes = nBufBytes;
+    swapData.msgTmp = NULL;
     
     while(swapData.id == -1)
 	CthYield();
@@ -614,6 +615,10 @@ AMdl::swapSendMore()
 	swapData.nOutBytes -= nOutMax;
 	swapData.nOutBufBytes -= nOutMax;
 	swapData.nSndBytes += nOutMax;
+	if(swapData.msgTmp) { // Waiting for memory to become available
+	    swapGetMore(swapData.msgTmp);
+	    }
+	
 	proxyAmdl[swapData.id].swapGetMore(mesg);
 	}
     else {
@@ -628,8 +633,12 @@ AMdl::swapGetMore(MdlSwapMsg *mesg)
     CProxy_AMdl proxyAmdl(aId);
     int nBytes = mesg->nBytes;	// temporary for bytes transferred
     
-    while(swapData.pszIn + nBytes > swapData.pszOut)
-	CthYield();		// pause while buffer is transferred out
+    if(swapData.pszIn + nBytes > swapData.pszOut) {
+	assert(swapData.msgTmp == NULL);
+	swapData.msgTmp = mesg;
+	return;
+	}
+    swapData.msgTmp = NULL;
 
     memcpy(swapData.pszIn, mesg->pszBuf, nBytes);
 
