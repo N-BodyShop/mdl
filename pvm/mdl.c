@@ -158,7 +158,11 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 			pvm_pkbyte(argv[0],iLen,1);
 			pvm_mcast(&mdl->atid[1],nThreads-1,MDL_TAG_INIT);
 			if (mdl->bDiag) {
-				sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
+			        if(rindex(argv[0], '/'))
+				    sprintf(achDiag,"%s/%s.%d",ach,
+					    rindex(argv[0],'/')+1,mdl->idSelf);
+				else
+				    sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
 				mdl->fpDiag = fopen(achDiag,"w");
 				assert(mdl->fpDiag != NULL);
 				}
@@ -176,7 +180,11 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 				if (mdl->atid[mdl->idSelf] == tidSelf) break;
 				}
 			if (mdl->bDiag) {
-				sprintf(achDiag,"%s/%s.%d",ach,name,mdl->idSelf);
+			        if(rindex(name, '/'))
+				    sprintf(achDiag,"%s/%s.%d",ach,
+					    rindex(name,'/')+1,mdl->idSelf);
+				else
+				    sprintf(achDiag,"%s/%s.%d",ach,name,mdl->idSelf);
 				mdl->fpDiag = fopen(achDiag,"w");
 				assert(mdl->fpDiag != NULL);
 				}
@@ -717,22 +725,31 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->init = NULL;
 	c->combine = NULL;
 	/*
-	 ** Send checkin to all other threads.
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
-	++c->nCheckIn;
-	for (id=0;id<mdl->nThreads;++id) {
-		if (id == mdl->idSelf) continue;
+	if(mdl->idSelf == 0) {
+	    c->nCheckIn = 1;
+	    while(c->nCheckIn < mdl->nThreads)
+		mdlCacheReceive(mdl, NULL);
+	    }
+	else {
+	    pvm_initsend(PvmDataRaw);
+	    pvm_pkint(c->chki,4,1);
+	    pvm_send(mdl->atid[0],MDL_TAG_CACHECOM);
+	    }
+	if(mdl->idSelf == 0) {
+	    for(id = 1; id < mdl->nThreads; id++) {
 		pvm_initsend(PvmDataRaw);
 		pvm_pkint(c->chki,4,1);
 		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
 		}
-	/*
-	 ** Keep on servicing until nCheckIn == nThreads!
-	 ** THIS IS A SYNCHRONIZE!!!
-	 */
-	while (c->nCheckIn < mdl->nThreads) {
-		mdlCacheReceive(mdl,NULL);
-		}	
+	    }
+	else {
+	    c->nCheckIn = 0;
+	    while (c->nCheckIn == 0) {
+		    mdlCacheReceive(mdl,NULL);
+		    }	
+	    }	
 	AdjustDataSize(mdl);
 	}
 
@@ -751,22 +768,31 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	c->init = init;
 	c->combine = combine;
 	/*
-	 ** Send checkin to all other threads.
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
-	++c->nCheckIn;
-	for (id=0;id<mdl->nThreads;++id) {
-		if (id == mdl->idSelf) continue;
+	if(mdl->idSelf == 0) {
+	    c->nCheckIn = 1;
+	    while(c->nCheckIn < mdl->nThreads)
+		mdlCacheReceive(mdl, NULL);
+	    }
+	else {
+	    pvm_initsend(PvmDataRaw);
+	    pvm_pkint(c->chki,4,1);
+	    pvm_send(mdl->atid[0],MDL_TAG_CACHECOM);
+	    }
+	if(mdl->idSelf == 0) {
+	    for(id = 1; id < mdl->nThreads; id++) {
 		pvm_initsend(PvmDataRaw);
 		pvm_pkint(c->chki,4,1);
 		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
 		}
-	/*
-	 ** Keep on servicing until nCheckIn == nThreads!
-	 ** THIS IS A SYNCHRONIZE!!!
-	 */
-	while (c->nCheckIn < mdl->nThreads) {
-		mdlCacheReceive(mdl,NULL);
-		}	
+	    }
+	else {
+	    c->nCheckIn = 0;
+	    while (c->nCheckIn == 0) {
+		    mdlCacheReceive(mdl,NULL);
+		    }	
+	    }	
 	AdjustDataSize(mdl);
 	}
 
@@ -798,22 +824,31 @@ void mdlFinishCache(MDL mdl,int cid)
 			}
 		}
 	/*
-	 ** Send checkout to all other threads.
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
-	for (id=0;id<mdl->nThreads;++id) {
-		if (id == mdl->idSelf) continue;
+	if(mdl->idSelf == 0) {
+	    ++c->nCheckOut;
+	    while(c->nCheckOut < mdl->nThreads)
+		mdlCacheReceive(mdl, NULL);
+	    }
+	else {
+	    pvm_initsend(PvmDataRaw);
+	    pvm_pkint(c->chko,4,1);
+	    pvm_send(mdl->atid[0],MDL_TAG_CACHECOM);
+	    }
+	if(mdl->idSelf == 0) {
+	    for(id = 1; id < mdl->nThreads; id++) {
 		pvm_initsend(PvmDataRaw);
 		pvm_pkint(c->chko,4,1);
 		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
 		}
-	++c->nCheckOut;
-	/*
-	 ** Keep on servicing until nCheckOut == nThreads!
-	 ** THIS IS A SYNCHRONIZE!!!
-	 */
-	while (c->nCheckOut < mdl->nThreads) {
-		mdlCacheReceive(mdl,NULL);
-		}
+	    }
+	else {
+	    c->nCheckOut = 0;
+	    while (c->nCheckOut == 0) {
+		    mdlCacheReceive(mdl,NULL);
+		    }	
+	    }	
 	/*
 	 ** Free up storage and finish.
 	 */
