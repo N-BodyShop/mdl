@@ -1,0 +1,841 @@
+/*
+ ** A very low level Machine model. For homogeneous systems only!
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <string.h>
+#include <malloc.h>
+#include <assert.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include "mdl.h"
+#include "pvm3.h"
+
+
+#define MDL_NOCACHE			0
+#define MDL_ROCACHE			1
+#define MDL_COCACHE			2
+
+
+#define PVM_TRANS_SIZE	50000 
+#define MDL_TAG_INIT 		1
+#define MDL_TAG_SWAPINIT 	2
+#define MDL_TAG_SWAP		3
+#define MDL_TAG_REQ	   		4
+#define MDL_TAG_RPL			5
+
+
+void _srvNull(void *p1,char *pszIn,int nInBytes,char *pszOut,
+			  int *pnOutBytes)
+{
+	return;
+	}
+
+
+double mdlCpuTimer(MDL mdl)
+{
+	struct rusage ru;
+
+	getrusage(0,&ru);
+	return((double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec);
+	}
+
+
+/*
+ */
+int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
+{
+	MDL mdl;
+	int tidSelf;
+	int i,nThreads,nArch,bid,bDiag,bThreads,iLen,ret;
+	struct pvmhostinfo *hostp;
+	char *p,ach[256],achDiag[256],name[256];
+
+	*pmdl = NULL;
+	mdl = malloc(sizeof(struct mdlContext));
+	assert(mdl != NULL);
+	/*
+	 ** Provide a 'null' service for sid = 0, so that stopping the 
+	 ** service handler is well defined!
+	 */
+	mdl->pfcnService[0] = _srvNull;
+	/*
+	 ** Do some low level argument parsing for number of threads, and
+	 ** diagnostic flag!
+	 */
+	bDiag = 0;
+	bThreads = 0;
+	i = 1;
+	while (argv[i]) {
+		if (!strcmp(argv[i],"-sz") && !bThreads) {
+			++i;
+			if (argv[i]) {
+				nThreads = atoi(argv[i]);
+				bThreads = 1;
+				}
+			}
+		if (!strcmp(argv[i],"+d") && !bDiag) {
+			p = getenv("MDL_DIAGNOSTIC");
+			if (!p) p = getenv("HOME");
+			if (!p) sprintf(ach,"/tmp");
+			else sprintf(ach,"%s",p);
+			bDiag = 1;
+			}
+		++i;
+		}
+	if (!bThreads) {
+		tidSelf = pvm_mytid();
+		pvm_config(&nThreads,&nArch,&hostp);
+		}
+    else if (nThreads > 1) {
+		tidSelf = pvm_mytid();
+		}
+	mdl->bDiag = bDiag;
+	mdl->nThreads = nThreads;
+	mdl->atid = malloc(mdl->nThreads*sizeof(int));
+	assert(mdl->atid != NULL);
+	/*
+	 ** Initialize caching spaces.
+	 */
+	for (i=0;i<MDL_MAX_CACHE_SPACES;++i) {
+		mdl->cache[i].iType = MDL_NOCACHE;
+		}
+	*pmdl = mdl;
+	if (nThreads > 1) {
+		if (pvm_parent() < 0) {
+			/*
+			 ** Parent thread, start children.
+			 */
+			mdl->idSelf = 0;
+			mdl->atid[mdl->idSelf] = tidSelf;
+			ret = pvm_spawn(argv[0],argv,PvmTaskDefault,NULL,mdl->nThreads-1,
+							&mdl->atid[1]);
+			pvm_initsend(PvmDataRaw);
+			pvm_pkint(mdl->atid,mdl->nThreads,1);
+			iLen = strlen(argv[0])+1;
+			pvm_pkint(&iLen,1,1);
+			pvm_pkbyte(argv[0],iLen,1);
+			pvm_mcast(&mdl->atid[1],nThreads-1,MDL_TAG_INIT);
+			if (mdl->bDiag) {
+				sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
+				mdl->fpDiag = fopen(achDiag,"w");
+				assert(mdl->fpDiag != NULL);
+				}
+			return(nThreads);
+			}
+		else {
+			/*
+			 ** Child thread, get tid array and determine idSelf.
+			 */
+			bid = pvm_recv(-1,MDL_TAG_INIT);
+			pvm_upkint(mdl->atid,mdl->nThreads,1);
+			pvm_upkint(&iLen,1,1);
+			pvm_upkbyte(name,iLen,1);
+			pvm_freebuf(bid);
+			for (mdl->idSelf=1;mdl->idSelf<mdl->nThreads;++mdl->idSelf) {
+				if (mdl->atid[mdl->idSelf] == tidSelf) break;
+				}
+			if (mdl->bDiag) {
+				sprintf(achDiag,"%s/%s.%d",ach,name,mdl->idSelf);
+				mdl->fpDiag = fopen(achDiag,"w");
+				assert(mdl->fpDiag != NULL);
+				}
+			(*fcnChild)(mdl);
+			mdlFinish(mdl);
+			exit(0);
+			}
+		}
+	else {
+		/*
+		 ** A unik!
+		 */
+		mdl->idSelf = 0;
+		mdl->atid[mdl->idSelf] = 0;
+		if (mdl->bDiag) {
+			sprintf(achDiag,"%s.%d",ach,mdl->idSelf);
+			mdl->fpDiag = fopen(achDiag,"w");
+			assert(mdl->fpDiag != NULL);
+			}
+		return(nThreads);
+		}
+	}
+
+
+void mdlFinish(MDL mdl)
+{
+	/*
+	 ** Close Diagnostic file.
+	 */
+	if (mdl->bDiag) {
+		fclose(mdl->fpDiag);
+		}
+	/*
+	 ** Deregister from PVM and deallocate storage.
+	 */
+	if (mdl->nThreads > 1) pvm_exit();
+	free(mdl->atid);
+	free(mdl);
+	}
+
+
+/*
+ ** This function returns the number of threads in the set of 
+ ** threads.
+ */
+int mdlThreads(MDL mdl)
+{
+	return(mdl->nThreads);
+	}
+
+
+/*
+ ** This function returns this threads 'id' number within the specified
+ ** MDL Context. Parent thread always has 'id' of 0, where as children
+ ** have 'id's ranging from 1..(nThreads - 1).
+ */
+int mdlSelf(MDL mdl)
+{
+	return(mdl->idSelf);
+	}
+
+
+/*
+ ** This is a tricky function. It initiates a bilateral transfer between
+ ** two threads. Both threads MUST be expecting this transfer. The transfer
+ ** occurs between idSelf <---> 'id' or 'id' <---> idSelf as seen from the
+ ** opposing thread. It is designed as a high performance non-local memory
+ ** swapping primitive and implementation will vary in non-trivial ways 
+ ** between differing architectures and parallel paradigms (eg. message
+ ** passing and shared address space). A buffer is specified by 'pszBuf'
+ ** which is 'nBufBytes' in size. Of this buffer the LAST 'nOutBytes' are
+ ** transfered to the opponent, in turn, the opponent thread transfers his
+ ** nBufBytes to this thread's buffer starting at 'pszBuf'.
+ ** If the transfer completes with no problems the function returns 1.
+ ** If the function returns 0 then one of the players has not received all
+ ** of the others memory, however he will have successfully transfered all
+ ** of his memory.
+ */
+int mdlSwap(MDL mdl,int id,int nBufBytes,char *pszBuf,int nOutBytes,
+			int *pnSndBytes,int *pnRcvBytes)
+{
+	int tid,bid,nInBytes,nOutBufBytes,nInMax,nOutMax;
+	char *pszIn,*pszOut;
+
+	tid = mdl->atid[id];
+	*pnRcvBytes = 0;
+	*pnSndBytes = 0;
+	/*
+	 **	Send number of rejects to target thread amount of free space
+	 */ 
+	pvm_initsend(PvmDataRaw);
+	pvm_pkint(&nOutBytes,1,1);
+	pvm_pkint(&nBufBytes,1,1);
+	pvm_send(tid,MDL_TAG_SWAPINIT);
+	/*
+	 ** Receive the number of target thread rejects and target free space
+	 */
+	bid = pvm_recv(tid,MDL_TAG_SWAPINIT);
+	pvm_upkint(&nInBytes,1,1);
+	pvm_upkint(&nOutBufBytes,1,1);
+	pvm_freebuf(bid);
+	/*
+	 ** Start bilateral transfers. Note: One processor is GUARANTEED to 
+	 ** complete all its transfers.
+	 */
+	pszOut = &pszBuf[nBufBytes-nOutBytes];
+	pszIn = pszBuf;
+	while (nOutBytes && nInBytes) {
+		/*
+		 ** nOutMax is the maximum number of bytes allowed to be sent
+		 ** nInMax is the number of bytes which will be received.
+		 */
+		nOutMax = (nOutBytes < PVM_TRANS_SIZE)?nOutBytes:PVM_TRANS_SIZE;
+		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
+		nInMax = (nInBytes < PVM_TRANS_SIZE)?nInBytes:PVM_TRANS_SIZE;
+		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkbyte(pszOut,nOutMax,1);
+		pvm_send(tid,MDL_TAG_SWAP);
+		bid = pvm_recv(tid,MDL_TAG_SWAP);
+		pvm_upkbyte(pszIn,nInMax,1);
+		pvm_freebuf(bid);
+		/*
+		 ** Adjust pointers and counts for next itteration.
+		 */
+		pszOut = &pszOut[nOutMax];
+		nOutBytes -= nOutMax;
+		nOutBufBytes -= nOutMax;
+		*pnSndBytes += nOutMax;
+		pszIn = &pszIn[nInMax];
+		nInBytes -= nInMax;
+		nBufBytes -= nInMax;
+		*pnRcvBytes += nInMax;
+		}
+	/*
+	 ** At this stage we perform only unilateral transfers, and here we
+	 ** could exceed the opponent's storage capacity.
+	 */
+	while (nOutBytes && nOutBufBytes) {
+		nOutMax = (nOutBytes < PVM_TRANS_SIZE)?nOutBytes:PVM_TRANS_SIZE;
+		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkbyte(pszOut,nOutMax,1);
+		pvm_send(tid,MDL_TAG_SWAP);
+		pszOut = &pszOut[nOutMax];
+		nOutBytes -= nOutMax;
+		nOutBufBytes -= nOutMax;
+		*pnSndBytes += nOutMax;
+		}
+	while (nInBytes && nBufBytes) {
+		nInMax = (nInBytes < PVM_TRANS_SIZE)?nInBytes:PVM_TRANS_SIZE;
+		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
+		bid = pvm_recv(tid,MDL_TAG_SWAP);
+		pvm_upkbyte(pszIn,nInMax,1);
+		pvm_freebuf(bid);
+		pszIn = &pszIn[nInMax];
+		nInBytes -= nInMax;
+		nBufBytes -= nInMax;
+		*pnRcvBytes += nInMax;
+		}
+	if (nOutBytes) return(0);
+	else if (nInBytes) return(0);
+	else return(1);
+	}
+
+
+void mdlDiag(MDL mdl,char *psz)
+{
+	if (mdl->bDiag) {	
+		fputs(psz,mdl->fpDiag);
+		fflush(mdl->fpDiag);
+		}
+	}
+
+
+void mdlAddService(MDL mdl,int sid,void *p1,void (*fcnService)())
+{
+	mdl->pp1[sid] = p1;
+	mdl->pfcnService[sid] = fcnService;
+	}
+
+
+void mdlReqService(MDL mdl,int id,int sid,char *pszIn,int nInBytes)
+{
+	int tid;
+
+	tid = mdl->atid[id];
+	pvm_initsend(PvmDataRaw);
+	pvm_pkint(&mdl->idSelf,1,1);
+	pvm_pkint(&sid,1,1);
+	if (!pszIn) nInBytes = 0;
+	pvm_pkint(&nInBytes,1,1);
+	if (nInBytes > 0) pvm_pkbyte(pszIn,nInBytes,1);
+	pvm_send(tid,MDL_TAG_REQ);
+	}
+
+
+void mdlGetReply(MDL mdl,int id,char *pszOut,int *pnOutBytes)
+{
+	int tid,bid,nOutBytes;
+
+	tid = mdl->atid[id];
+	bid = pvm_recv(tid,MDL_TAG_RPL);
+	pvm_upkint(&nOutBytes,1,1);
+	if (nOutBytes > 0) pvm_upkbyte(pszOut,nOutBytes,1);
+	pvm_freebuf(bid);
+	if (pnOutBytes) *pnOutBytes = nOutBytes;
+	}
+
+
+void mdlHandler(MDL mdl)
+{
+	int bid,tid;
+	int nInBytes,nOutBytes,sid,idFrom;
+
+	sid = 1;
+	while (sid != SRV_STOP) {
+		bid = pvm_recv(-1,MDL_TAG_REQ);
+		pvm_upkint(&idFrom,1,1);
+		pvm_upkint(&sid,1,1);
+		pvm_upkint(&nInBytes,1,1);
+		if (nInBytes > 0) pvm_upkbyte(mdl->pszIn,nInBytes,1);
+		pvm_freebuf(bid);
+
+		nOutBytes = 0;
+		(*mdl->pfcnService[sid])(mdl->pp1[sid],mdl->pszIn,nInBytes,
+								 mdl->pszOut,&nOutBytes);
+
+		tid = mdl->atid[idFrom];
+		pvm_initsend(PvmDataRaw);
+		pvm_pkint(&nOutBytes,1,1);
+		if (nOutBytes > 0) pvm_pkbyte(mdl->pszOut,nOutBytes,1);
+		pvm_send(tid,MDL_TAG_RPL);
+		}
+	}
+
+
+#define MDL_CACHE_SIZE		500000
+#define MDL_CACHELINE_BITS	4
+#define MDL_CACHE_MASK		((1<<MDL_CACHELINE_BITS)-1)
+
+#define MDL_TAG_CACHECOM	10
+#define MDL_MID_CACHEIN		1
+#define MDL_MID_CACHEREQ	2
+#define MDL_MID_CACHERPL	3
+#define MDL_MID_CACHEOUT	4
+#define MDL_MID_CACHEFLSH	5
+
+#define MDL_CHECK_INTERVAL  100
+#define MDL_RANDMOD		1771875
+#define MDL_RAND(mdl) (mdl->uRand = (mdl->uRand*2416+374441)%MDL_RANDMOD)
+
+
+int mdlCacheReceive(MDL mdl,char *pLine)
+{
+	CACHE *c;
+	char *t;
+	int bid,msg[4],n,i;
+
+	bid = pvm_recv(-1,MDL_TAG_CACHECOM);
+	pvm_upkint(msg,4,1);
+	c = &mdl->cache[msg[0]];
+	switch (msg[1]) {
+	case MDL_MID_CACHEIN:
+		pvm_freebuf(bid);
+		++c->nCheckIn;
+		return(0);
+	case MDL_MID_CACHEOUT:
+		pvm_freebuf(bid);
+		++c->nCheckOut;
+		return(0);
+	case MDL_MID_CACHEREQ:
+		pvm_freebuf(bid);
+		pvm_initsend(PvmDataRaw);
+		c->rpl[3] = msg[3];
+		pvm_pkint(c->rpl,4,1);
+		pvm_pkbyte(&c->pData[msg[3]*c->iLineSize],c->iLineSize,1);
+		pvm_send(mdl->atid[msg[2]],MDL_TAG_CACHECOM);
+		return(0);
+	case MDL_MID_CACHEFLSH:
+		assert(c->iType == MDL_COCACHE);
+		/*
+		 ** Unpack the data into the 'sentinel-line' cache data.
+		 */
+		pvm_upkbyte(c->pLine,c->iLineSize,1);
+		pvm_freebuf(bid);
+		i = msg[3]*c->nLineElts;
+		t = &c->pData[i*c->iDataSize];
+		/*
+		 ** Make sure we don't combine beyond the number of data elements!
+		 */
+		n = i + c->nLineElts;
+		if (n > c->nData) n = c->nData;
+		n -= i;
+		n *= c->iDataSize;
+		for (i=0;i<n;i+=c->iDataSize) {
+			(*c->combine)(&t[i],&c->pLine[i]);
+			}
+		return(0);
+	case MDL_MID_CACHERPL:
+		/*
+		 ** For now assume no prefetching!
+		 ** This means that this MUST be the reply to this Aquire
+		 ** request.
+		 */
+		assert(pLine != NULL);
+		pvm_upkbyte(pLine,c->iLineSize,1);
+		pvm_freebuf(bid);
+		if (c->iType == MDL_COCACHE) {
+			/*
+			 ** Call the initializer function for all elements in 
+			 ** the cache line.
+			 */
+			for (i=0;i<c->iLineSize;i+=c->iDataSize) {
+				(*c->init)(&pLine[i]);
+				}
+			}
+		return(1);
+		}
+	}
+
+
+void AdjustDataSize(MDL mdl)
+{
+	int i,iMaxDataSize;
+
+	/*
+	 ** Change buffer size?
+	 */
+	iMaxDataSize = 0;
+	for (i=0;i<MDL_MAX_CACHE_SPACES;++i) {
+		if (mdl->cache[i].iType == MDL_NOCACHE) continue;
+		if (mdl->cache[i].iDataSize > iMaxDataSize) {
+			iMaxDataSize = mdl->cache[i].iDataSize;
+			}
+		}
+	if (iMaxDataSize != mdl->iMaxDataSize) {
+		/*
+		 ** Create new buffer with realloc?
+		 */
+		mdl->iMaxDataSize = iMaxDataSize;
+		}
+	}
+
+
+/*
+ ** Initialize a caching space.
+ */
+void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
+{
+	CACHE *c = &mdl->cache[cid];
+	int i,id;
+
+	c->iType = MDL_ROCACHE;
+	c->pData = pData;
+	c->iDataSize = iDataSize;
+	c->nData = nData;
+	c->nLineElts = (1 << MDL_CACHELINE_BITS); 
+	c->iLineSize = c->nLineElts*c->iDataSize;
+	/*
+	 ** Determine the number of cache lines to be allocated.
+	 */
+	c->nLines = (MDL_CACHE_SIZE/c->iDataSize) >> MDL_CACHELINE_BITS;
+	assert(c->nLines < MDL_RANDMOD);
+	c->nTrans = 1;
+	while(c->nTrans < c->nLines) c->nTrans *= 2;
+	c->iTransMask = c->nTrans-1;
+	/*
+	 **	Set up the translation table.
+	 */
+	c->pTrans = malloc(c->nTrans*sizeof(int));	
+	assert(c->pTrans != NULL);
+	for (i=0;i<c->nTrans;++i) c->pTrans[i] = 0;
+	/*
+	 ** Set up the tags. Note pTag[0] is a Sentinel!
+	 */
+	c->pTag = malloc(c->nLines*sizeof(CTAG));
+	assert(c->pTag != NULL);
+	c->pTag[0].nLock = 1;		/* always locked */
+	for (i=1;i<c->nLines;++i) {
+		c->pTag[i].id = -1;		/* invalid */	
+		c->pTag[i].iLine = -1;	/* invalid */	
+		c->pTag[i].nLock = 0;
+		c->pTag[i].iLink = 0;
+		}
+	/*
+	 ** Allocate cache data lines.
+	 */
+	c->pLine = malloc(c->nLines*c->iLineSize);
+	assert(c->pLine != NULL);
+	c->req[0] = cid;
+	c->req[1] = MDL_MID_CACHEREQ;
+	c->req[2] = mdl->idSelf;
+	c->rpl[0] = cid;
+	c->rpl[1] = MDL_MID_CACHERPL;
+	c->rpl[2] = mdl->idSelf;
+	c->chko[0] = cid;
+	c->chko[1] = MDL_MID_CACHEOUT;
+	c->chko[2] = mdl->idSelf;
+	c->chki[0] = cid;
+	c->chki[1] = MDL_MID_CACHEIN;
+	c->chki[2] = mdl->idSelf;
+	c->flsh[0] = cid;
+	c->flsh[1] = MDL_MID_CACHEFLSH;
+	c->flsh[2] = mdl->idSelf;
+	c->nAccess = 0;
+	c->nCheckOut = 0;
+	c->init = NULL;
+	c->combine = NULL;
+	c->nCheckIn = 1;
+	/*
+	 ** Send checkin to all other threads.
+	 */
+	for (id=0;id<mdl->nThreads;++id) {
+		if (id == mdl->idSelf) continue;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkint(c->chki,4,1);
+		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+		}
+	/*
+	 ** Keep on servicing until nCheckIn == nThreads!
+	 */
+	while (c->nCheckIn < mdl->nThreads) {
+		mdlCacheReceive(mdl,NULL);
+		}	
+	AdjustDataSize(mdl);
+	}
+
+
+void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
+				void (*init)(void *),void (*combine)(void *,void *))
+{
+	CACHE *c = &mdl->cache[cid];
+	int i,id;
+
+	c->iType = MDL_COCACHE;
+	c->pData = pData;
+	c->iDataSize = iDataSize;
+	c->nData = nData;
+	c->nLineElts = (1 << MDL_CACHELINE_BITS); 
+	c->iLineSize = c->nLineElts*c->iDataSize;
+	/*
+	 ** Determine the number of cache lines to be allocated.
+	 */
+	c->nLines = (MDL_CACHE_SIZE/c->iDataSize) >> MDL_CACHELINE_BITS;
+	assert(c->nLines < MDL_RANDMOD);
+	c->nTrans = 1;
+	while(c->nTrans < c->nLines) c->nTrans *= 2;
+	c->iTransMask = c->nTrans-1;
+	/*
+	 **	Set up the translation table.
+	 */
+	c->pTrans = malloc(c->nTrans*sizeof(int));	
+	assert(c->pTrans != NULL);
+	for (i=0;i<c->nTrans;++i) c->pTrans[i] = 0;
+	/*
+	 ** Set up the tags. Note pTag[0] is a Sentinel!
+	 */
+	c->pTag = malloc(c->nLines*sizeof(CTAG));
+	assert(c->pTag != NULL);
+	c->pTag[0].nLock = 1;		/* always locked */
+	for (i=1;i<c->nLines;++i) {
+		c->pTag[i].id = -1;		/* invalid */	
+		c->pTag[i].iLine = -1;	/* invalid */	
+		c->pTag[i].nLock = 0;
+		c->pTag[i].iLink = 0;
+		}
+	/*
+	 ** Allocate cache data lines.
+	 */
+	c->pLine = malloc(c->nLines*c->iLineSize);
+	assert(c->pLine != NULL);
+	c->req[0] = cid;
+	c->req[1] = MDL_MID_CACHEREQ;
+	c->req[2] = mdl->idSelf;
+	c->rpl[0] = cid;
+	c->rpl[1] = MDL_MID_CACHERPL;
+	c->rpl[2] = mdl->idSelf;
+	c->chko[0] = cid;
+	c->chko[1] = MDL_MID_CACHEOUT;
+	c->chko[2] = mdl->idSelf;
+	c->chki[0] = cid;
+	c->chki[1] = MDL_MID_CACHEIN;
+	c->chki[2] = mdl->idSelf;
+	c->flsh[0] = cid;
+	c->flsh[1] = MDL_MID_CACHEFLSH;
+	c->flsh[2] = mdl->idSelf;
+	c->nAccess = 0;
+	c->nCheckOut = 0;
+	c->init = init;
+	c->combine = combine;
+	c->nCheckIn = 1;
+	/*
+	 ** Send checkin to all other threads.
+	 */
+	for (id=0;id<mdl->nThreads;++id) {
+		if (id == mdl->idSelf) continue;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkint(c->chki,4,1);
+		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+		}
+	/*
+	 ** Keep on servicing until nCheckOut == nThreads!
+	 */
+	while (c->nCheckIn < mdl->nThreads) {
+		mdlCacheReceive(mdl,NULL);
+		}
+	AdjustDataSize(mdl);
+	}
+
+
+void mdlFinishCache(MDL mdl,int cid)
+{
+	CACHE *c = &mdl->cache[cid];
+	int i,id,iLine;
+
+	if (c->iType == MDL_COCACHE) {
+		/*
+		 ** Must flush all valid data elements.
+		 */
+		for (i=1;i<c->nLines;++i) {
+			iLine = c->pTag[i].iLine;
+			if (iLine >= 0) {
+				/*
+				 ** Flush element since it is valid!
+				 */
+				c->flsh[3] = iLine;
+				pvm_initsend(PvmDataRaw);
+				pvm_pkint(c->flsh,4,1);
+				pvm_pkbyte(&c->pLine[i*c->iLineSize],c->iLineSize,1);
+				pvm_send(mdl->atid[c->pTag[i].id],MDL_TAG_CACHECOM);
+				}
+			}
+		}
+	/*
+	 ** Send checkout to all other threads.
+	 */
+	for (id=0;id<mdl->nThreads;++id) {
+		if (id == mdl->idSelf) continue;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkint(c->chko,4,1);
+		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+		}
+	++c->nCheckOut;
+	/*
+	 ** Keep on servicing until nCheckOut == nThreads!
+	 */
+	while (c->nCheckOut < mdl->nThreads) {
+		mdlCacheReceive(mdl,NULL);
+		}
+	/*
+	 ** Free up storage and finish.
+	 */
+	free(c->pTrans);
+	free(c->pTag);
+	free(c->pLine);
+	c->iType = MDL_NOCACHE;
+	AdjustDataSize(mdl);
+	}
+
+
+void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
+{
+	CACHE *c = &mdl->cache[cid];
+	char *pLine;
+	int iElt,iLine,i;
+	int iVictim,iLineVic,idVic,*pi;
+	char ach[80];
+
+	if (++c->nAccess == MDL_CHECK_INTERVAL) {
+		if (mdl->nThreads > 1) {
+			while (pvm_probe(-1,MDL_TAG_CACHECOM)) {
+				mdlCacheReceive(mdl,NULL);
+				}
+			}
+		c->nAccess = 0;
+		}
+	/*
+	 ** Is it a local request?
+	 */
+	if (id == mdl->idSelf) {
+		return(&c->pData[iIndex*c->iDataSize]);
+		}
+	/*
+	 ** Determine memory block key value and cache line.
+	 */
+	iElt = iIndex & MDL_CACHE_MASK;
+	iLine = iIndex >> MDL_CACHELINE_BITS;
+	i = c->pTrans[iLine % c->iTransMask];
+	/*
+	 ** Check for a match!
+	 */
+	while (i) {
+		if (c->pTag[i].id == id) {
+			if (c->pTag[i].iLine == iLine) {
+				++c->pTag[i].nLock;
+				pLine = &c->pLine[i*c->iLineSize];
+				return(&pLine[iElt*c->iDataSize]);
+				}
+			}
+		i = c->pTag[i].iLink;
+		}
+	/*
+	 ** Cache Miss.
+	 */
+	c->req[3] = iLine;
+	pvm_initsend(PvmDataRaw);
+	pvm_pkint(c->req,4,1);
+	pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+	/*
+	 **	Victim Search!
+	 ** Note: if more than 1771875 cache lines are present this random
+	 ** number generation may have to be changed, although none of the
+	 ** code will break in this case. The only problem may be non-optimal
+	 ** cache line replacement. Maybe give a warning at initialization?
+	 */
+	iVictim = MDL_RAND(mdl)%c->nLines;
+	for (i=0;i<c->nLines;++i) {
+		if (!c->pTag[iVictim].nLock) {
+			/*
+			 ** Found victim.
+			 */
+			iLineVic = c->pTag[iVictim].iLine;
+			/*
+			 ** 'pLine' will point to the actual data line in the cache.
+			 */
+			pLine = &c->pLine[iVictim*c->iLineSize];
+			if (iLineVic >= 0) {
+				if (c->iType == MDL_COCACHE) {
+					/*
+					 ** Flush element since it is valid!
+					 */
+					c->flsh[3] = iLineVic;
+					pvm_initsend(PvmDataRaw);
+					pvm_pkint(c->flsh,4,1);
+					pvm_pkbyte(pLine,c->iLineSize,1);
+					pvm_send(mdl->atid[c->pTag[iVictim].id],MDL_TAG_CACHECOM);
+					}
+				/*
+				 ** If valid iLine then "unlink" it from the cache.
+				 */
+				pi = &c->pTrans[iLineVic % c->iTransMask];
+				while (*pi != iVictim) pi = &c->pTag[*pi].iLink;
+				*pi = c->pTag[iVictim].iLink;
+				}
+			c->pTag[iVictim].id = id;	
+			c->pTag[iVictim].iLine = iLine;
+			c->pTag[iVictim].nLock = 1;
+			/*
+			 **	Add the modified victim tag back into the cache.
+			 ** Note: the new element is placed at the head of the chain.
+			 */
+			pi = &c->pTrans[iLine % c->iTransMask];
+			c->pTag[iVictim].iLink = *pi;
+			*pi = iVictim;
+			goto Await;
+			}
+		if (++iVictim == c->nLines) iVictim = 0;
+		}
+	/*
+	 ** Cache Failure!
+	 */
+	sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
+	mdlDiag(mdl,ach);
+	exit(1);
+ Await:
+	/*
+	 ** At this point 'pLine' is the recipient cache line for the 
+	 ** data requested from processor 'id'.
+	 */
+	while (1) {
+		if (mdlCacheReceive(mdl,pLine))
+			return(&pLine[iElt*c->iDataSize]);
+		}
+	}
+
+
+void mdlRelease(MDL mdl,int cid,void *p)
+{
+	CACHE *c = &mdl->cache[cid];
+	int iLine,iData;
+	
+	iLine = ((char *)p - c->pLine) / c->iLineSize;
+	/*
+	 ** Check if the pointer fell in a cache line, otherwise it
+	 ** must have been a local pointer.
+	 */
+	if (iLine > 0 && iLine < c->nLines) {
+		--c->pTag[iLine].nLock;
+		assert(c->pTag[iLine].nLock >= 0);
+		}
+	else {
+		iData = ((char *)p - c->pData) / c->iDataSize;
+		assert(iData >= 0 && iData < c->nData);
+		}
+	}
+
+
+
+
+
