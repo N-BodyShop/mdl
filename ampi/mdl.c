@@ -799,7 +799,7 @@ void AdjustDataSize(MDL mdl)
  ** For PVM and most machines these functions are trivial, but on the 
  ** T3D and perhaps some future machines these functions are required.
  */
-void *mdlMalloc(MDL mdl,int iSize)
+void *mdlMalloc(MDL mdl,size_t iSize)
 {	
 	return(malloc(iSize));
 	}

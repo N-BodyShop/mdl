@@ -689,15 +689,14 @@ void AdjustDataSize(MDL mdl)
  ** For PVM and most machines these functions are trivial, but on the 
  ** T3D and perhaps some future machines these functions are required.
  */
-void *mdlMalloc(MDL mdl,int iSize)
+void *mdlMalloc(MDL mdl,size_t iSize)
 {
     int i;
     size_t shmax;
     void *ptr;
-    size_t sSize = iSize; /* get to correct type for collect */
 
     MPI_Barrier(MPI_COMM_WORLD);
-    shmem_fcollect64(shmem_array,&sSize,1,0,0,mdl->nThreads,pSync);
+    shmem_fcollect64(shmem_array,&iSize,1,0,0,mdl->nThreads,pSync);
     shmax=0;
     for (i=0;i<mdl->nThreads;++i) {
 	if (shmax < shmem_array[i]) shmax=shmem_array[i];
