@@ -1380,7 +1380,7 @@ grpCache::waitCache(int id)
     
     if(msgCache[iRank]) {
 	msgTmp = msgCache[iRank];
-	msgCache = NULL;
+	msgCache[iRank] = NULL;
 	return msgTmp;
 	}
     else {
