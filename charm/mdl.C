@@ -1247,22 +1247,39 @@ AMdl::barrier()
 void
 grpCache::flushreply()
 {
+    CProxy_AMdl proxyAMdl(aId);
+
+    CkPrintf("In flushreply, nFlush: %d\n", nFlush);
+
     CmiLock(lock);		// single thread at a time
     nFlush--;
     if(nFlush == 0) {
 	if(threadBarrier)
-	    CthAwaken(threadBarrier);
+	    proxyAMdl[idFlushing].waitflushAwaken();
 	}
     CmiUnlock(lock);		// single thread at a time
     }
 
 void
+AMdl::waitflushAwaken()
+{
+    CProxy_grpCache proxyCache(CacheId);
+
+    CthAwaken(proxyCache.ckLocalBranch()->threadBarrier);
+}
+
+void
 grpCache::waitflush()
 {
+    CmiLock(lock);
     if(nFlush) {
 	threadBarrier = CthSelf();
+	CmiUnlock(lock);
 	CthSuspend();
 	threadBarrier = 0;
+	}
+    else {
+	CmiUnlock(lock);
 	}
     }
 
@@ -1308,7 +1325,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	}
 
 void
-grpCache::FinishCache(int cid)
+grpCache::FinishCache(int cid, int idSelf)
 {
     int i,id;
     char *t;
@@ -1322,9 +1339,11 @@ grpCache::FinishCache(int cid)
 	CmiUnlock(lock);
 	return;
 	}
+    idFlushing = idSelf;
     CmiUnlock(lock);
 
     if (c->iType == MDL_COCACHE) {
+    	CkPrintf("%d: Flushall started\n", CkMyPe());
 	/*
 	 ** Must flush all valid data elements.
 	 */
@@ -1383,6 +1402,7 @@ grpCache::FinishCache(int cid)
 	    proxyAMdl[idFlush].CacheFlushAll(mesgFlsh);
 	    }
 	waitflush();
+    	CkPrintf("%d: Flushall finished\n", CkMyPe());
 	}
     /*
      ** Free up storage and finish.
@@ -1400,7 +1420,7 @@ void mdlFinishCache(MDL mdl,int cid)
 {
 	CProxy_grpCache proxyCache(CacheId);
 
-	proxyCache.ckLocalBranch()->FinishCache(cid);
+	proxyCache.ckLocalBranch()->FinishCache(cid, mdl->idSelf);
 	mdl->pSelf->barrier();
 	mdl->pSelf->cache[cid].iType = MDL_NOCACHE;
 	mdl->pSelf->barrier();

@@ -151,6 +151,7 @@ class grpCache : public NodeGroup
     CmiNodeLock lock;
     CthThreadStruct * threadBarrier;
     int nFlush;
+    int idFlushing;
     CthThreadStruct ** threadCache;
     MdlCacheMsg **msgCache;
     
@@ -163,7 +164,7 @@ class grpCache : public NodeGroup
     MdlCacheMsg *waitCache(int iRank) ;
     void flushreply();
     void waitflush();
-    void FinishCache(int cid);
+    void FinishCache(int cid, int idSelf);
 };
 
 void mdlSetup(MDL *pmdl, int bDiag, const char *);
@@ -222,6 +223,7 @@ public:
     void barrierEnter();
     void barrierRel();
     void waitflush();
+    void waitflushAwaken();
 };
 
 #endif

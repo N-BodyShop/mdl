@@ -42,5 +42,6 @@ mainmodule mdl {
     entry void CacheFlushAll(MdlCacheFlshMsg *mesg);
     entry void barrierEnter();
     entry void barrierRel();
+    entry void waitflushAwaken();
   };
 };
