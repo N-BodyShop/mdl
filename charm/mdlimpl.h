@@ -9,8 +9,8 @@ CProxy_AMdl aId;
 CProxy_Main MainId;
 CProxy_grpCache CacheId;
 
-#define MDL_CACHE_SIZE		8000000
-#define MDL_CACHELINE_BITS	4
+#define MDL_CACHE_SIZE		16000000
+#define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
 #define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
@@ -85,7 +85,7 @@ class MdlCacheFlshMsg : public CMessage_MdlCacheFlshMsg
     };
 
 extern "C"
-void AMPI_Main(int argc, char **);
+void MPI_Main(int argc, char **);
 
 class Main : public Chare
 {
@@ -118,6 +118,7 @@ typedef struct cacheSpace {
 	int iDataSize;
 	int iLineSize;
 	int nLines;
+	int iLine;
 	int nTrans;
 	int iTransMask;
         int iKeyShift;
@@ -210,6 +211,8 @@ public:
     int nInBar;
     int nFlush;
     int iMyRank;
+    int *vecIndex;
+    int nElem;
     
     MDL mdl;
     AMdl(int bDiag, const std::string& progname);
@@ -234,6 +237,14 @@ public:
     void barrierRel();
     void waitflush();
     void waitflushAwaken();
+    inline int indexRank(int index) 
+	{
+	    for(int i = 0; i < nElem; i++) {
+		if(index == vecIndex[i])
+		    return i;
+		}
+	    return -1;
+	    }
 };
 
 #endif

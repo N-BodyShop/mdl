@@ -320,7 +320,7 @@ Main::startMain(CkArgMsg* m)
 
       delete m;
 
-      AMPI_Main(argc, argv);
+      MPI_Main(argc, argv);
 };
 
 void
@@ -365,6 +365,7 @@ AMdl::AMdl(int bDiag, const std::string& progname)
 
 	CProxy_grpCache proxyCache(CacheId);
 	iMyRank = proxyCache.ckLocalBranch()->elementRegister(thisIndex);
+	vecIndex = proxyCache.ckLocalBranch()->vecIndex;
     }
 
 void
@@ -1156,6 +1157,7 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 	 */
 	c->nLines = (nElem*MDL_CACHE_SIZE/c->iDataSize)
 	    >> MDL_CACHELINE_BITS;
+	c->iLine = 1;
 	c->nTrans = 1;
 	while(c->nTrans < c->nLines) c->nTrans *= 2;
 	c->nTrans *= 2;
@@ -1302,6 +1304,8 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	    proxyCache.ckLocalBranch()->cache;
 	mdl->pSelf->lock = 
 	    &(proxyCache.ckLocalBranch()->lock);
+	mdl->pSelf->nElem = 
+	    proxyCache.ckLocalBranch()->nElem;
 
 	mdl->pSelf->barrier();
 	}
@@ -1326,6 +1330,8 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	    proxyCache.ckLocalBranch()->cache;
 	mdl->pSelf->lock = 
 	    &(proxyCache.ckLocalBranch()->lock);
+	mdl->pSelf->nElem = 
+	    proxyCache.ckLocalBranch()->nElem;
 
 	mdl->pSelf->barrier();
 	}
@@ -1457,12 +1463,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	int bLocalFetch;	// Can we get the line locally?
 	char* pLocalAddress;	// Address of line if so
 	int peId;
-	// Bad hack to replace above line which is too inefficient
-	// for me.  Note that pmap is set in the array constructor,
-	// while the actual map is set in Main.
-	// int peId=mdl->pSelf->procMap->pmap[id];
-	// New method below takes care of the common case.
-	int iRank = proxyCache.ckLocalBranch()->indexRank(id);
+	int iRank = proxyAMdl[mdl->idSelf].ckLocal()->indexRank(id);
 	
 	if((c->iType == MDL_ROCACHE && iRank != -1) || id == mdl->idSelf) {
 	    // It's on node or purely local: use shared memory
@@ -1561,15 +1562,20 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		c->nAccHigh += 1;
 		}
 	iVictim = 0;
-	for (i=1;i<c->nLines;++i) {
-		if (c->pTag[i].nLast < c->pTag[iVictim].nLast) {
-			if (!c->pTag[i].nLock) {
-			    iVictim = i;
-			    if(c->pTag[i].nLast == -1)
-				break;
-			    }
-			}
-		}
+	for (i=c->iLine;i<c->nLines;++i) {
+	  if (!c->pTag[i].nLock) { 
+		c->iLine = i+1;
+		iVictim = i;
+		goto GotVictim;
+	  }
+	}
+	for (i=1;i<c->iLine;++i) {
+	  if (!c->pTag[i].nLock) { 
+		c->iLine = i+1;
+		iVictim = i;
+		goto GotVictim;
+	  }
+	}
 	if (!iVictim) {
 		/*
 		 ** Cache Failure!
@@ -1578,6 +1584,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		mdlDiag(mdl,ach);
 		assert(0);
 		}
+GotVictim:
 	iKeyVic = c->pTag[iVictim].iKey;
 	/*
 	 ** 'pLine' will point to the actual data line in the cache.
