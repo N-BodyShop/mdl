@@ -626,11 +626,11 @@ void mdlHandler(MDL mdl)
  ** of the others memory, however he will have successfully transfered all
  ** of his memory.
  */
-int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
-	    int *pnSndBytes,int *pnRcvBytes)
+int mdlSwap(MDL mdl,int id,size_t nBufBytes,void *vBuf,size_t nOutBytes,
+	    size_t *pnSndBytes,size_t *pnRcvBytes)
 {
     SWX *pout,*pin;
-    int i,nInBytes,nOutBufBytes,nInMax,nOutMax;
+    size_t i,nInBytes,nOutBufBytes,nInMax,nOutMax;
     char *pszBuf = vBuf;
     char *pszIn,*pszOut;
     
@@ -804,7 +804,7 @@ int mdlCacheReceive(MDL mdl)
 		 * Data is out; unlock it
 		 */
 		pthread_mutex_unlock(&pmbx->mux);
-		t = &c->pData[i*c->iDataSize];
+		t = &c->pData[i*((size_t)c->iDataSize)];
 		/*
 		 ** Make sure we don't combine beyond the number of data elements!
 		 */
@@ -908,7 +908,7 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->pData = pData;
 	c->iDataSize = iDataSize;
 	c->nData = nData;
-	c->pDataMax = nData*iDataSize;
+	c->pDataMax = nData*((size_t)iDataSize);
 
 	c->pTrans = NULL;
 	c->pTag = NULL;
@@ -1157,7 +1157,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 
 	if(c->iType == MDL_ROCACHE || id == mdl->idSelf) {
 	    CACHE *cc = &mdl->pmdl[id]->cache[cid];
-	    return(&cc->pData[iIndex*c->iDataSize]);
+	    return(&cc->pData[iIndex*((size_t)c->iDataSize)]);
 	    }
 
 	++c->nAccess;
