@@ -860,8 +860,8 @@ grpCache::grpCache()
      */
     iMaxDataSize = 0;
     iCaBufSize = sizeof(CAHEAD);
-    msgCache = new (MdlCacheMsg *)[CkNodeSize(CkMyNode())];
-    threadCache = new (CthThreadStruct *)[CkNodeSize(CkMyNode())];
+    msgCache = new MdlCacheMsg*[CkNodeSize(CkMyNode())];
+    threadCache = new CthThreadStruct*[CkNodeSize(CkMyNode())];
     for(i = 0; i < CkNodeSize(CkMyNode()); i++) {
 	msgCache[i] = NULL;
 	threadCache[i] = 0;
@@ -904,6 +904,8 @@ grpCache::CacheRequest(MdlCacheMsg *mesg)
 	// CkArrayIndex1D aidxId(mesg->ch.id);
 
 	// proxyCache[CkNodeOf(proxyAMdl.ckLocMgr()->homePe(aidxId))].CacheReply(mesgRpl);
+	// Orion says I may need:
+	// int pe=arr.ckLocalBranch()->lastKnown(CkArrayIndex1D(i));
 	proxyCache[CkNodeOf(mesg->ch.id)].CacheReply(mesgRpl);
 	delete mesg;
     }
@@ -918,9 +920,51 @@ grpCache::CacheReply(MdlCacheMsg *mesg)
 	 */
     int iRank = CmiRankOf(mesg->ch.rid);
     
+    CmiLock(lock);		// Avoid contention with waitCache()
     msgCache[iRank] = mesg;	// save message
-    if(threadCache[iRank])
-	CthAwaken(threadCache[iRank]);
+    if(threadCache[iRank]) {
+	CProxy_AMdl proxyAMdl(aId);
+	proxyAMdl[mesg->ch.rid].unblockCache(iRank);
+	}
+    CmiUnlock(lock);
+    }
+
+void
+AMdl::unblockCache(int iRank)
+{
+    CProxy_grpCache proxyCache(CacheId);
+
+    CthAwaken(proxyCache.ckLocalBranch()->threadCache[iRank]);
+    }
+
+    
+MdlCacheMsg *
+grpCache::waitCache(int id) 
+{
+    MdlCacheMsg * msgTmp;
+    int iRank = CmiRankOf(id);
+    
+    // CkPrintf("%d: entering waitCache with Rank %d\n", id, iRank);
+    
+    CmiLock(lock);		// Avoid contention with CacheReply()
+    if(msgCache[iRank]) {
+	msgTmp = msgCache[iRank];
+	msgCache[iRank] = NULL;
+	CmiUnlock(lock);	
+	// CkPrintf("%d: leaving waitCache, no wait\n", id);
+	return msgTmp;
+	}
+    else {
+	threadCache[iRank] = CthSelf();
+	CmiUnlock(lock);	
+	CthSuspend();
+	}
+    assert(msgCache[iRank]);
+    threadCache[iRank] = 0;
+    msgTmp = msgCache[iRank];
+    msgCache[iRank] = NULL;
+    // CkPrintf("%d: leaving waitCache, after wait\n", id);
+    return msgTmp;
     }
 
 void
@@ -1372,28 +1416,6 @@ void mdlCacheCheck(MDL mdl)
     
     }
 #endif
-
-MdlCacheMsg *
-grpCache::waitCache(int id) 
-{
-    MdlCacheMsg * msgTmp;
-    int iRank = CmiRankOf(id);
-    
-    if(msgCache[iRank]) {
-	msgTmp = msgCache[iRank];
-	msgCache[iRank] = NULL;
-	return msgTmp;
-	}
-    else {
-	threadCache[iRank] = CthSelf();
-	CthSuspend();
-	}
-    assert(msgCache[iRank]);
-    threadCache[iRank] = 0;
-    msgTmp = msgCache[iRank];
-    msgCache[iRank] = NULL;
-    return msgTmp;
-    }
 
 extern "C"
 void *mdlAquire(MDL mdl,int cid,int iIndex,int id)

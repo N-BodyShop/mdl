@@ -210,6 +210,7 @@ public:
     void stopSrv();
     void reqReply(MdlMsg * mesg);
     void reqHandle(MdlMsg * mesg);
+    void unblockCache(int iRank);
     void CacheFlush(MdlCacheMsg *mesg);
     void CacheFlushAll(MdlCacheFlshMsg *mesg);
     void barrier();
