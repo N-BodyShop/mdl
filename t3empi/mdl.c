@@ -674,10 +674,22 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
 	c->iKeyShift = 0;
 	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
-	if(c->iKeyShift < MDL_CACHELINE_BITS)
+	c->iIdMask = (1 << c->iKeyShift) - 1;
+	
+	if(c->iKeyShift < MDL_CACHELINE_BITS) {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) | id.
+	   */
+	    c->iInvKeyShift = MDL_CACHELINE_BITS;
 	    c->iKeyShift = 0;
-	else
+	    }
+	else {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) << KeyShift | id.
+	   */
+	    c->iInvKeyShift = c->iKeyShift;
 	    c->iKeyShift -= MDL_CACHELINE_BITS;
+	    }
 	/*
 	 ** Determine the number of cache lines to be allocated.
 	 */
@@ -865,8 +877,8 @@ void mdlFinishCache(MDL mdl,int cid)
 				/*
 				 ** Flush element since it is valid!
 				 */
-				id = iKey%mdl->nThreads;
-				caFlsh->iLine = iKey/mdl->nThreads;
+				id = iKey & c->iIdMask;
+				caFlsh->iLine = iKey >> c->iInvKeyShift;
 				t = &c->pLine[i*c->iLineSize];
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
@@ -1071,13 +1083,13 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 			    /*
 			     ** Flush element since it is valid!
 			     */
-			    idVic = iKeyVic%mdl->nThreads;
+			    idVic = iKeyVic&c->iIdMask;
 			    caFlsh = (CAHEAD *)mdl->pszFlsh;
 			    pszFlsh = &mdl->pszFlsh[sizeof(CAHEAD)];
 			    caFlsh->cid = cid;
 			    caFlsh->mid = MDL_MID_CACHEFLSH;
 			    caFlsh->id = mdl->idSelf;
-			    caFlsh->iLine = iKeyVic/mdl->nThreads;
+			    caFlsh->iLine = iKeyVic >> c->iInvKeyShift;
 			    for(i = 0; i < c->iLineSize; ++i)
 				pszFlsh[i] = pLine[i];
 			    MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
@@ -1143,6 +1155,16 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 
 	shmem_get((long *)pLine,(long *)(c->pData + iLine*c->iLineSize),
 			  iLineSize_64,id);
+
+	if (c->iType == MDL_COCACHE) {
+		/*
+		 ** Call the initializer function for all elements in 
+		 ** the cache line.
+		 */
+		for (i=0;i<iLineSize_8;i+=c->iDataSize) {
+			(*c->init)(&pLine[i]);
+			}
+		}
 
 	return(&pLine[iElt*c->iDataSize]);
 	}
