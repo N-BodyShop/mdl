@@ -646,6 +646,101 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
+/*
+ ** Initialize a caching space.
+ ** WARNING!!! XXX This is just a copy of mdlROcache.  Fix me please!!!
+ */
+void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
+		void (*init)(void *), void (*combine)(void *, void *))
+{
+	CACHE *c;
+	int i,id,nMaxCacheIds,bFirst;
+	int msgid,iTag,nBytes,ret;
+
+	/*
+	 ** Allocate more cache spaces if required!
+	 */
+	assert(cid >= 0);
+	if (cid >= mdl->nMaxCacheIds) {
+		/*
+		 ** reallocate cache spaces, adding space for 2 new cache spaces
+		 ** including the one just defined.
+		 */
+		nMaxCacheIds = cid + 3;
+		mdl->cache = realloc(mdl->cache,nMaxCacheIds*sizeof(CACHE));
+		assert(mdl->cache != NULL);
+		/*
+		 ** Initialize the new cache slots.
+		 */
+		for (i=mdl->nMaxCacheIds;i<nMaxCacheIds;++i) {
+			mdl->cache[i].iType = MDL_NOCACHE;
+			}
+		mdl->nMaxCacheIds = nMaxCacheIds;
+		}
+	c = &mdl->cache[cid];
+	assert(c->iType == MDL_NOCACHE);
+	c->pData = pData;
+	c->iDataSize = iDataSize;
+	c->nData = nData;
+	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
+	c->iKeyShift = 0;
+	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
+	if(c->iKeyShift < MDL_CACHELINE_BITS)
+	    c->iKeyShift = 0;
+	else
+	    c->iKeyShift -= MDL_CACHELINE_BITS;
+	/*
+	 ** Determine the number of cache lines to be allocated.
+	 */
+	c->nLines = (MDL_CACHE_SIZE/c->iDataSize) >> MDL_CACHELINE_BITS;
+	assert(c->nLines < MDL_RANDMOD);
+	c->nTrans = 1;
+	while(c->nTrans < c->nLines) c->nTrans *= 2;
+	c->nTrans *= 2;
+	c->iTransMask = c->nTrans-1;
+	/*
+	 **	Set up the translation table.
+	 */
+	c->pTrans = malloc(c->nTrans*sizeof(int));	
+	assert(c->pTrans != NULL);
+	for (i=0;i<c->nTrans;++i) c->pTrans[i] = 0;
+	/*
+	 ** Set up the tags. Note pTag[0] is a Sentinel!
+	 */
+	c->pTag = malloc(c->nLines*sizeof(CTAG));
+	assert(c->pTag != NULL);
+	for (i=0;i<c->nLines;++i) {
+		c->pTag[i].iKey = -1;	/* invalid */	
+		c->pTag[i].nLock = 0;
+		c->pTag[i].nLast = 0;	/* !!! */
+		c->pTag[i].iLink = 0;
+		}
+	c->pTag[0].nLock = 1;		/* always locked */
+	c->pTag[0].nLast = INT_MAX;  	/* always Most Recently Used */
+	c->nAccess = 0;
+	c->nAccHigh = 0;
+	c->nMiss = 0;				/* !!!, not NB */
+	c->nColl = 0;				/* !!!, not NB */
+	c->nMin = 0;				/* !!!, not NB */	
+	c->nKeyMax = 500;				/* !!!, not NB */
+	c->pbKey = malloc(c->nKeyMax);			/* !!!, not NB */
+	assert(c->pbKey != NULL);			/* !!!, not NB */
+	for (i=0;i<c->nKeyMax;++i) c->pbKey[i] = 0;	/* !!!, not NB */
+	/*
+	 ** Allocate cache data lines.
+	 */
+	MPI_Barrier(MPI_COMM_WORLD);
+	shmem_fcollect(shmem_array,(long *)&nData,1,0,0,mdl->nThreads,pSync);
+	c->pDataMax=0;
+        for (i=0;i<mdl->nThreads;++i) {
+	    if (c->pDataMax < shmem_array[i]) c->pDataMax=shmem_array[i];
+	}
+	c->pDataMax *= iDataSize;
+
+	c->pLine = malloc(c->nLines*c->iLineSize);
+	assert(c->pLine != NULL);
+	MPI_Barrier(MPI_COMM_WORLD);
+	}
 
 void mdlFinishCache(MDL mdl,int cid)
 {
