@@ -606,9 +606,10 @@ AMdl::swapSendMore()
 	
 	MdlSwapMsg *mesg = new(&nOutMax, 0) MdlSwapMsg;
 	mesg->nBytes = nOutMax;
-	for (i=0;i<nOutMax;++i) mesg->pszBuf[i] = swapData.pszOut[i];
 	
-	// Adjust counts for next itteration
+	memcpy(mesg->pszBuf, swapData.pszOut, nOutMax);
+	
+	// Adjust counts for next iteration
 	swapData.pszOut += nOutMax;
 	swapData.nOutBytes -= nOutMax;
 	swapData.nOutBufBytes -= nOutMax;
@@ -631,8 +632,7 @@ AMdl::swapGetMore(MdlSwapMsg *mesg)
     while(swapData.pszIn + nBytes > swapData.pszOut)
 	CthYield();		// pause while buffer is transferred out
 
-    for(i = 0; i < nBytes; i++)
-	swapData.pszIn[i] = mesg->pszBuf[i];
+    memcpy(swapData.pszIn, mesg->pszBuf, nBytes);
 
     swapData.pszIn += nBytes;
     swapData.nInBytes -= nBytes;
@@ -1695,10 +1695,6 @@ void mdlRelease(MDL mdl,int cid,void *p)
 	
 	assert(c != NULL);
 	
-	if(c->iType == MDL_ROCACHE) { // Optimize: return immediately
-				      // for RO cache
-		return;
-		}
 	iLine = ((char *)p - c->pLine) / c->iLineSize;
 	/*
 	 ** Check if the pointer fell in a cache line, otherwise it
