@@ -177,7 +177,7 @@ int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
 int mdlThreads(MDL);
 int mdlSelf(MDL);
-int mdlSwap(MDL,int,int,void *,int,int *,int *);
+int mdlSwap(MDL,int,size_t,void *,size_t,size_t *,size_t *);
 void mdlDiag(MDL,char *);
 void mdlAddService(MDL,int,void *,void (*)(void *,void *,int,void *,int *),
 				   int,int);

@@ -356,16 +356,17 @@ int mdlSelf(MDL mdl)
  ** of the others memory, however he will have successfully transfered all
  ** of his memory.
  */
-int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
-			int *pnSndBytes,int *pnRcvBytes)
+int mdlSwap(MDL mdl,int id,size_t nBufBytes,void *vBuf,size_t nOutBytes,
+			size_t *pnSndBytes,size_t *pnRcvBytes)
 {
-	int nInBytes,nOutBufBytes,nInMax,nOutMax,i;
+	size_t nInBytes,nOutBufBytes;
+	int nInMax,nOutMax,i;
 	int mid,nBytes,iTag,ret,pid;
 	char *pszBuf = vBuf;
 	char *pszIn,*pszOut;
 	struct swapInit {
-		int nOutBytes;
-		int nBufBytes;
+		size_t nOutBytes;
+		size_t nBufBytes;
 		} swi,swo;
 	MPI_Status status;
 	MPI_Request request;
