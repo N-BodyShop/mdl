@@ -2,6 +2,7 @@
 #define MDL_HINCLUDED
 #include <stdio.h>
 #include <pthread.h>
+#include <assert.h>
 
 #define SRV_STOP		0
 
@@ -91,6 +92,72 @@ typedef struct mdlContext {
 	} * MDL;
 
 
+/*
+ * MDL debug and Timer macros and prototypes 
+ */
+/* 
+ * Compile time mdl debugging options
+ *
+ * mdl asserts: define MDLASSERT
+ * Probably should always be on unless you want no mdlDiag output at all
+ *
+ * NB: defining NDEBUG turns off all asserts so MDLASSERT will not assert
+ * however it will output using mdlDiag and the code continues.
+ */
+/* 
+ * Debug functions active: define MDLDEBUG
+ * Adds debugging mdldebug prints and mdldebugassert asserts
+ */
+/* 
+ * Timer functions active: define MDLTIMER
+ * Makes mdl timer functions active
+ */
+
+
+void mdlprintf( MDL mdl, const char *format, ... );
+
+#ifdef MDLASSERT
+#ifndef __STRING
+#define __STRING( arg )   (("arg"))
+#endif
+#define mdlassert(mdl,expr) \
+    { \
+      if (!(expr)) { \
+             mdlprintf( mdl, "%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, __STRING(expr) ); \
+             assert( expr ); \
+             } \
+    }
+#else
+#define mdlassert(mdl,expr)  assert(expr)
+#endif
+
+#ifdef MDLDEBUG
+#define mdldebugassert(mdl,expr)   mdlassert(mdl,expr)
+void mdldebug( MDL mdl, const char *format, ... );
+#else
+#define mdldebug
+#define mdldebugassert
+#endif
+
+typedef struct {
+  double wallclock;
+  double cpu;
+  double system;
+} mdlTimer;
+
+#ifdef MDLTIMER
+void mdlZeroTimer(MDL mdl,mdlTimer *);
+void mdlGetTimer(MDL mdl,mdlTimer *,mdlTimer *);
+void mdlPrintTimer(MDL mdl,char *message,mdlTimer *);
+#else
+#define mdlZeroTimer
+#define mdlGetTimer
+#define mdlPrintTimer
+#endif
+
+/*
+ ** General Functions
+ */
 double mdlCpuTimer(MDL);
 int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
