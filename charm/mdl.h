@@ -11,41 +11,6 @@ extern "C" {
 
 #define AMPI
 
-typedef struct cacheTag {
-	int iKey;
-	int nLock;
-	int nLast;
-	int iLink;
-	} CTAG;
-
-typedef struct cacheSpace {
-	int iType;
-	char *pData;
-	int iDataSize;
-	int nData;
-	int iLineSize;
-	int nLines;
-	int nTrans;
-	int iTransMask;
-        int iKeyShift;
-        int iInvKeyShift;
-        int iIdMask;
-	int *pTrans;
-	CTAG *pTag;
-	char *pLine;
-	void (*init)(void *);
-	void (*combine)(void *,void *);
-	/*	
-	 ** Statistics stuff.
-	 */
-	int nAccess;
-	int nAccHigh;
-	long nMiss;
-	long nColl;
-	long nMin;
-	int nKeyMax;
-	char *pbKey;
-	} CACHE;
 
 typedef struct serviceRec {
 	int nInBytes;
@@ -54,9 +19,13 @@ typedef struct serviceRec {
 	void (*fcnService)(void *,void *,int,void *,int *);	
 	} SERVICE;
 
+typedef struct AMdl AMdl; /* actually a C++ class, in mdlimpl.h */
+
 typedef struct mdlContext {
 	int nThreads;
 	int idSelf;
+	AMdl *pSelf;
+	int iNodeSelf;
 	int bDiag;
 	FILE *fpDiag;
 	/*
@@ -66,16 +35,7 @@ typedef struct mdlContext {
 	int nMaxSrvBytes;
 	SERVICE *psrv;
 	char *pszOut;
-	/*
-	 ** Caching stuff!
-	 */
-	unsigned long uRand;
-	int iMaxDataSize;
-	int iCaBufSize;
-	int nMaxCacheIds;
-	CACHE *cache;
 	} * MDL;
-
 
 /*
  * MDL debug and Timer macros and prototypes 

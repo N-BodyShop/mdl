@@ -7,9 +7,10 @@
 
 CProxy_AMdl aId;
 CProxy_Main MainId;
+CProxy_grpCache CacheId;
 
-#define MDL_CACHE_SIZE		4000000
-#define MDL_CACHELINE_BITS	3
+#define MDL_CACHE_SIZE		8000000
+#define MDL_CACHELINE_BITS	4
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
 #define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
@@ -95,6 +96,70 @@ public:
     void done(void);
 };
 
+typedef struct cacheTag {
+	int iKey;
+	int nLock;
+	int nLast;
+	int iLink;
+	int iIdLock;
+	int bFetching;
+	} CTAG;
+
+typedef	struct procDATA {
+	    int iProc;
+	    char *pData;
+	    int nData;
+	    } PDATA;
+
+typedef struct cacheSpace {
+	int iType;
+        PDATA *procData;
+	int iDataSize;
+	int iLineSize;
+	int nLines;
+	int nTrans;
+	int iTransMask;
+        int iKeyShift;
+        int iInvKeyShift;
+        int iIdMask;
+	int *pTrans;
+	CTAG *pTag;
+	char *pLine;
+	void (*init)(void *);
+	void (*combine)(void *,void *);
+	int nOut;
+	/*	
+	 ** Statistics stuff.
+	 */
+	int nAccess;
+	int nAccHigh;
+	long nMiss;
+	long nColl;
+	long nMin;
+	int nKeyMax;
+	char *pbKey;
+    } CACHE;
+
+class grpCache : public NodeGroup 
+{
+ public:
+    int nMaxCacheIds;
+    int iMaxDataSize;
+    int iCaBufSize;
+    CACHE *cache;
+    CmiNodeLock lock;
+    CthThreadStruct * threadBarrier;
+    int nFlush;
+    
+    grpCache();
+    void CacheInitialize(int cid,void *pData,int iDataSize,int nData,
+		    void (*init)(void *),void (*combine)(void *,void *));
+    void AdjustDataSize();
+    void flushreply();
+    void waitflush();
+    void FinishCache(int cid);
+};
+
 void mdlSetup(MDL *pmdl, int bDiag, const char *);
 
 PUPbytes(void *);
@@ -118,11 +183,13 @@ public:
     CthThreadStruct * threadSwap;
     CthThreadStruct * threadGetReply;
     CthThreadStruct * threadSrvWait;
-    CthThreadStruct * threadCache;
     CthThreadStruct * threadBarrier;
+    CthThreadStruct * threadCache;
+    CACHE *cache;		/* pointer to nodegroup cache */
+    CmiNodeLock *lock;		/* pointer to nodegroup lock */
     MdlMsg ** msgReply;
-    int idReplyWait;
     MdlCacheMsg *msgCache;
+    int idReplyWait;
     int nInBar;
     int nFlush;
     
@@ -149,7 +216,6 @@ public:
     void barrier();
     void barrierEnter();
     void barrierRel();
-    void flushreply();
     void waitflush();
 };
 

@@ -1,6 +1,7 @@
 mainmodule mdl {
   readonly CProxy_AMdl aId;
   readonly CProxy_Main MainId;
+  readonly CProxy_grpCache CacheId;
 
   message[varsize] MdlMsg;
   message[varsize] MdlSwapMsg;
@@ -10,7 +11,13 @@ mainmodule mdl {
   mainchare Main {
     entry Main(CkArgMsg *m);
     entry [threaded] void startMain(CkArgMsg *m);
+//    entry void startMain(CkArgMsg *m);
     entry void done(void);
+  };
+
+  nodegroup grpCache {
+    entry grpCache();
+    entry void flushreply();
   };
 
   array [1D] AMdl {
@@ -23,12 +30,12 @@ mainmodule mdl {
     entry void reqReply(MdlMsg *);
     entry void stopSrv();
     entry [threaded] void reqHandle(MdlMsg *);
+//    entry void reqHandle(MdlMsg *);
     entry void CacheRequest(MdlCacheMsg *mesg);
     entry void CacheReply(MdlCacheMsg *mesg);
     entry void CacheFlush(MdlCacheMsg *mesg);
     entry void CacheFlushAll(MdlCacheFlshMsg *mesg);
     entry void barrierEnter();
     entry void barrierRel();
-    entry void flushreply();
   };
 };

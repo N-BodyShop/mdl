@@ -1,0 +1,43 @@
+Issues for porting MDL to charm:
+
+First try: (revision 1.3)
+
+This is not that different than, say, an MPI version.  Out of order
+delivery messages was the one thing we had to deal with.  Cache
+flushes were a particular problem since the barrier message could be
+delivered before all the flush messages were processed.
+
+revision 1.4: the flush problem was fixed by creating a "FlushAll"
+message, where all flushes back to a single processor can be done at
+once.  This can then be acknowledged, and solves the out-of-order
+message problem.  It would be a good idea to implement this on other
+ports.
+
+4/03:
+Attempt to use NodeGroups so that all processors on an SMP node can
+share their cache.  This also means that processors on a single node
+can use shared memory to get at each others data.  First issue: shared
+memory is SLOWER than individual processors on a single node.  It
+seems there is a problem with threads stumbling over each other.  One
+telling problem is that removing CthYield() from mdlCacheCheck speeds
+up the shared memory execution, but slows down the non-shared
+execution.
+
+5/03: I am now using "CmiDeliverMsgs()".  This helps the non-threaded version
+significantly.  I am now pretty sure that part of the slowdown seen above is
+compilers fault: the mis-aligned stack problem would show up in the threaded
+version but not the single thread version.
+
+Summary of cache architecture:
+
+For readonly cache: if it is on node, simply use shared memory.  Off node
+accesses are held in a cache that is shared by all processes on a node.  Each
+line has a "bFetching" bit to indicate that a line has been requested, but
+hasn't been returned.  This allows more process to be issuing requests at
+once.
+
+For combining cache: all requests (even on-node) end up in the cache.  The
+standard line locking is supplemented by the processor who has it locked.
+If another processor has the line locked then the line request is REISSUED!
+This means there can be multiple copies of the same line in the cache.  This
+is OK since it all gets combined in the end.
