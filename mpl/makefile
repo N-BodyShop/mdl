@@ -6,5 +6,5 @@ CC_FLAGS = -O2
 default: mdl.o
 
 mdl.o: mdl.c mdl.h
-	mcc $(CC_FLAGS) -c mdl.c
+	mpcc $(CC_FLAGS) -c mdl.c
 

@@ -68,22 +68,22 @@ typedef struct mdlContext {
 	int nMaxServices;
 	int nMaxSrvBytes;
 	SERVICE *psrv;
-	void *pvIn;
-	void *pvOut;
-	void *pvBuf;
+	char *pszIn;
+	char *pszOut;
+	char *pszBuf;
 	/*
 	 ** Swapping buffer.
 	 */
-	char *pszBuf;
+	char *pszTrans;
 	/*
 	 ** Caching stuff!
 	 */
 	unsigned long uRand;
 	int iMaxDataSize;
 	int iCaBufSize;
-	void *pvRcv;
+	char *pszRcv;
 	int midRcv;
-	void **ppvRpl;
+	char **ppszRpl;
 	int nMaxCacheIds;
 	CACHE *cache;
 	} * MDL;

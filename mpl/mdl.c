@@ -97,17 +97,17 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	/*
 	 ** Allocate service buffers.
 	 */
-	mdl->pvIn = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
-	assert(mdl->pvIn != NULL);
-	mdl->pvOut = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
-	assert(mdl->pvOut != NULL);
-	mdl->pvBuf = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
-	assert(mdl->pvBuf != NULL);
+	mdl->pszIn = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
+	assert(mdl->pszIn != NULL);
+	mdl->pszOut = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
+	assert(mdl->pszOut != NULL);
+	mdl->pszBuf = malloc(mdl->nMaxSrvBytes+sizeof(SRVHEAD));
+	assert(mdl->pszBuf != NULL);
 	/*
 	 ** Allocate swapping transfer buffer. This buffer remains fixed.
 	 */
-	mdl->pszBuf = malloc(MDL_TRANS_SIZE);
-	assert(mdl->pszBuf != NULL);
+	mdl->pszTrans = malloc(MDL_TRANS_SIZE);
+	assert(mdl->pszTrans != NULL);
 	/*
 	 ** Allocate initial cache spaces.
 	 */
@@ -158,13 +158,13 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	 */
 	mdl->iMaxDataSize = 0;
 	mdl->iCaBufSize = sizeof(CAHEAD);
-	mdl->pvRcv = malloc(mdl->iCaBufSize);
-	assert(mdl->pvRcv != NULL);
-	mdl->ppvRpl = malloc(mdl->nThreads*sizeof(void *));
-	assert(mdl->ppvRpl != NULL);
+	mdl->pszRcv = malloc(mdl->iCaBufSize);
+	assert(mdl->pszRcv != NULL);
+	mdl->ppszRpl = malloc(mdl->nThreads*sizeof(char *));
+	assert(mdl->ppszRpl != NULL);
 	for (i=0;i<mdl->nThreads;++i) {
-		mdl->ppvRpl[i] = malloc(mdl->iCaBufSize);
-		assert(mdl->ppvRpl[i] != NULL);
+		mdl->ppszRpl[i] = malloc(mdl->iCaBufSize);
+		assert(mdl->ppszRpl[i] != NULL);
 		}
 	mdl->bDiag = bDiag;
 	*pmdl = mdl;
@@ -184,7 +184,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 			 ** Child thread.
 			 */
 			if (mdl->bDiag) {
-				sprintf(achDiag,"%s/%s.%d",ach,name,mdl->idSelf);
+				sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
 				mdl->fpDiag = fopen(achDiag,"w");
 				assert(mdl->fpDiag != NULL);
 				}
@@ -209,6 +209,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 
 void mdlFinish(MDL mdl)
 {
+  int i;
+
 	/*
 	 ** Close Diagnostic file.
 	 */
@@ -219,13 +221,14 @@ void mdlFinish(MDL mdl)
 	 ** Deallocate storage.
 	 */
 	free(mdl->psrv);
-	free(mdl->pvIn);
-	free(mdl->pvOut);
-	free(mdl->pvBuf);
+	free(mdl->pszIn);
+	free(mdl->pszOut);
 	free(mdl->pszBuf);
+	free(mdl->pszTrans);
 	free(mdl->cache);
-	free(mdl->pvCaSnd);
-	free(mdl->pvCaRcv);
+	free(mdl->pszRcv);
+	for (i=0;i<mdl->nThreads;++i) free(mdl->ppszRpl[i]);
+	free(mdl->ppszRpl);
 	free(mdl);
 	}
 
@@ -271,7 +274,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 			int *pnSndBytes,int *pnRcvBytes)
 {
 	int nInBytes,nOutBufBytes,nInMax,nOutMax,i;
-	int mid,nBytes,iTag,ret;
+	int mid,nBytes,iTag,ret,pid;
 	char *pszBuf = vBuf;
 	char *pszIn,*pszOut;
 	struct swapInit {
@@ -291,7 +294,8 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 ** Receive the number of target thread rejects and target free space
 	 */
 	iTag = MDL_TAG_SWAPINIT;
-	ret = mpc_brecv(&swo,sizeof(swo),&id,&iTag,&nBytes);
+	pid = id;
+	ret = mpc_brecv(&swo,sizeof(swo),&pid,&iTag,&nBytes);
 	assert(ret == 0);
 	assert(nBytes == sizeof(swo));
 	mpc_wait(&mid,&nBytes);
@@ -315,13 +319,14 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		/*
 		 ** Copy to a temp buffer to be safe.
 		 */
-		for (i=0;i<nOutMax;++i) mdl->pszBuf[i] = pszOut[i];
-		mpc_send(mdl->pszBuf,nOutMax,id,MDL_TAG_SWAP,&mid);
+		for (i=0;i<nOutMax;++i) mdl->pszTrans[i] = pszOut[i];
+		mpc_send(mdl->pszTrans,nOutMax,id,MDL_TAG_SWAP,&mid);
 		iTag = MDL_TAG_SWAP;
-		ret = mpc_brecv(pszIn,nInMax,&id,&iTag,&nBytes);
+		pid = id;
+		ret = mpc_brecv(pszIn,nInMax,&pid,&iTag,&nBytes);
 		assert(ret == 0);
 		assert(nBytes == nInMax);
-		mpc_wait(&mid,&nInBytes);
+		mpc_wait(&mid,&nBytes);
 		/*
 		 ** Adjust pointers and counts for next itteration.
 		 */
@@ -338,7 +343,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 ** At this stage we perform only unilateral transfers, and here we
 	 ** could exceed the opponent's storage capacity.
 	 ** Note: use of bsend is mandatory here, also because of this we
-	 ** don't need to use the intermediate buffer mdl->pszBuf.
+	 ** don't need to use the intermediate buffer mdl->pszTrans.
 	 */
 	while (nOutBytes && nOutBufBytes) {
 		nOutMax = (nOutBytes < MDL_TRANS_SIZE)?nOutBytes:MDL_TRANS_SIZE;
@@ -408,12 +413,12 @@ void mdlAddService(MDL mdl,int sid,void *p1,
 	 */
 	nMaxBytes = (nInBytes > nOutBytes)?nInBytes:nOutBytes;
 	if (nMaxBytes > mdl->nMaxSrvBytes) {
-		mdl->pvIn = realloc(mdl->pvIn,nMaxBytes+sizeof(SRVHEAD));
-		assert(mdl->pvIn != NULL);
-		mdl->pvOut = realloc(mdl->pvOut,nMaxBytes+sizeof(SRVHEAD));
-		assert(mdl->pvOut != NULL);
-		mdl->pvBuf = realloc(mdl->pvBuf,nMaxBytes+sizeof(SRVHEAD));
-		assert(mdl->pvBuf != NULL);
+		mdl->pszIn = realloc(mdl->pszIn,nMaxBytes+sizeof(SRVHEAD));
+		assert(mdl->pszIn != NULL);
+		mdl->pszOut = realloc(mdl->pszOut,nMaxBytes+sizeof(SRVHEAD));
+		assert(mdl->pszOut != NULL);
+		mdl->pszBuf = realloc(mdl->pszBuf,nMaxBytes+sizeof(SRVHEAD));
+		assert(mdl->pszBuf != NULL);
 		mdl->nMaxSrvBytes = nMaxBytes;
 		}
 	mdl->psrv[sid].p1 = p1;
@@ -429,8 +434,8 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 	/*
 	 ** If this looks like dangerous magic, it's because it is!
 	 */
-	SRVHEAD *ph = mdl->pvBuf;
-	char *pszOut = (char *)(mdl->pvBuf + sizeof(SRVHEAD));
+	SRVHEAD *ph = (SRVHEAD *)mdl->pszBuf;
+	char *pszOut = &mdl->pszBuf[sizeof(SRVHEAD)];
 	int i,ret;
 
 	ph->idFrom = mdl->idSelf;
@@ -440,7 +445,7 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 	if (nInBytes > 0 && pszIn != NULL) {
 		for (i=0;i<nInBytes;++i) pszOut[i] = pszIn[i];
 		}
-	ret = mpc_bsend(mdl->pvBuf,nInBytes+sizeof(SRVHEAD),id,MDL_TAG_REQ);
+	ret = mpc_bsend(mdl->pszBuf,nInBytes+sizeof(SRVHEAD),id,MDL_TAG_REQ);
 	assert(ret == 0);
 	}
 
@@ -448,12 +453,12 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 {
 	char *pszOut = vout;
-	SRVHEAD *ph = mdl->pvBuf;
-	char *pszIn = (char *)(mdl->pvBuf + sizeof(SRVHEAD));
+	SRVHEAD *ph = (SRVHEAD *)mdl->pszBuf;
+	char *pszIn = &mdl->pszBuf[sizeof(SRVHEAD)];
 	int i,ret,iTag,nBytes;
 
 	iTag = MDL_TAG_RPL;
-	ret = mpc_brecv(mdl->pvBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
+	ret = mpc_brecv(mdl->pszBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
 					&id,&iTag,&nBytes);
 	assert(ret == 0);
 	assert(nBytes == ph->nOutBytes + sizeof(SRVHEAD));
@@ -466,17 +471,17 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 
 void mdlHandler(MDL mdl)
 {
-	SRVHEAD *phi = mdl->pvIn;
-	SRVHEAD *pho = mdl->pvOut;
-	char *pszIn = (char *)(mdl->pvIn + sizeof(SRVHEAD));
-	char *pszOut = (char *)(mdl->pvOut + sizeof(SRVHEAD));
-	int sid,ret,iTag,id,nOutBytes;
+	SRVHEAD *phi = (SRVHEAD *)mdl->pszIn;
+	SRVHEAD *pho = (SRVHEAD *)mdl->pszOut;
+	char *pszIn = &mdl->pszIn[sizeof(SRVHEAD)];
+	char *pszOut = &mdl->pszOut[sizeof(SRVHEAD)];
+	int sid,ret,iTag,id,nOutBytes,nBytes;
 
 	sid = 1;
 	while (sid != SRV_STOP) {
 		iTag = MDL_TAG_REQ;
 		id = mdl->dontcare;
-		ret = mpc_brecv(mdl->pvIn,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
+		ret = mpc_brecv(mdl->pszIn,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
 						&id,&iTag,&nBytes);
 		assert(ret == 0);
 		/*
@@ -496,7 +501,7 @@ void mdlHandler(MDL mdl)
 		pho->sid = sid;
 		pho->nInBytes = phi->nInBytes;
 		pho->nOutBytes = nOutBytes;
-		ret = mpc_bsend(mdl->pvOut,nOutBytes+sizeof(SRVHEAD),id,MDL_TAG_RPL);
+		ret = mpc_bsend(mdl->pszOut,nOutBytes+sizeof(SRVHEAD),id,MDL_TAG_RPL);
 		assert(ret == 0);
 		}
 	}
@@ -521,8 +526,8 @@ void mdlHandler(MDL mdl)
 int mdlCacheReceive(MDL mdl,char *pLine)
 {
 	CACHE *c;
-	CAHEAD *ph = mdl->pvRcv;
-	char *pszRcv = (char *)(mdl->pvRcv + sizeof(CAHEAD));
+	CAHEAD *ph = (CAHEAD *)mdl->pszRcv;
+	char *pszRcv = &mdl->pszRcv[sizeof(CAHEAD)];
 	CAHEAD *phRpl;
 	char *pszRpl;
 	char *t;
@@ -542,8 +547,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		 ** difficulties surface. Making sure to have one buffer per
 		 ** thread solves those problems here.
 		 */
-		pszRpl = (char *)(mdl->ppvRpl[ph->id] + sizeof(CAHEAD));
-		phRpl = mdl->ppvRpl[ph->id];
+		pszRpl = &mdl->ppszRpl[ph->id][sizeof(CAHEAD)];
+		phRpl = (CAHEAD *)mdl->ppszRpl[ph->id];
 		phRpl->cid = ph->cid;
 		phRpl->mid = MDL_MID_CACHERPL;
 		t = &c->pData[ph->iLine*c->iLineSize];
@@ -618,11 +623,11 @@ void AdjustDataSize(MDL mdl)
 		mdl->iMaxDataSize = iMaxDataSize;
 		mdl->iCaBufSize = sizeof(CAHEAD) + 
 			iMaxDataSize*(1 << MDL_CACHELINE_BITS);
-		mdl->pvRcv = realloc(mdl->pvRcv,mdl->iCaBufSize);
-		assert(mdl->pvRcv != NULL);
+		mdl->pszRcv = realloc(mdl->pszRcv,mdl->iCaBufSize);
+		assert(mdl->pszRcv != NULL);
 		for (i=0;i<mdl->nThreads;++i) {
-			mdl->ppvRpl[i] = realloc(mdl->ppvRpl[i],mdl->iCaBufSize);
-			assert(mdl->ppvRpl[i] != NULL);
+			mdl->ppszRpl[i] = realloc(mdl->ppszRpl[i],mdl->iCaBufSize);
+			assert(mdl->ppszRpl[i] != NULL);
 			}
 		}
 	}
@@ -638,6 +643,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	CAHEAD caIn;
 	int msgid,iTag,nBytes;
 
+printf("%d:enter ROcache\n",mdl->idSelf);
 	/*
 	 ** Allocate more cache spaces if required!
 	 */
@@ -729,26 +735,26 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	 ** See if we need to post the FIRST nonblocking receive!
 	 */
 	bFirst = 1;
-	for (i=0;i<mdl->nCacheIds;++i) {
+	for (i=0;i<mdl->nMaxCacheIds;++i) {
 		if (mdl->cache[i].iType != MDL_NOCACHE) bFirst = 0;
 		}
 	c->iType = MDL_ROCACHE;
-	if (bFirst) {
+	if (bFirst && mdl->nThreads > 1) {
 		id = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
 		}
 	/*
 	 ** Keep on servicing until nCheckIn == nThreads!
 	 */
 	++c->nCheckIn;
-	while (1) {
+	while (c->nCheckIn < mdl->nThreads) {
 		mpc_wait(&mdl->midRcv,&nBytes);
 		mdlCacheReceive(mdl,NULL);
 		if (c->nCheckIn == mdl->nThreads) break;
 		id = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
 		}	
 	/*
 	 ** Do an explicit synchronize for safety reasons, after this
@@ -759,9 +765,12 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	/*
 	 ** Issue new nonblocking recv on the new buffer.
 	 */
-	id = mdl->dontcare;
-	iTag = MDL_TAG_CACHECOM;
-	mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+	if (mdl->nThreads > 1) {
+	  id = mdl->dontcare;
+	  iTag = MDL_TAG_CACHECOM;
+	  mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+	}
+printf("%d:exit ROcache\n",mdl->idSelf);
 	}
 
 
@@ -771,6 +780,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	CAHEAD caOut;
 	int i,id,iTag,bLast,nBytes,msgid;
 
+printf("%d:enter FinishCache\n",mdl->idSelf);
 	caOut.cid = cid;
 	caOut.mid = MDL_MID_CACHEOUT;
 	caOut.id = mdl->idSelf;
@@ -787,13 +797,13 @@ void mdlFinishCache(MDL mdl,int cid)
 	 ** Keep on servicing until nCheckOut == nThreads!
 	 */
 	++c->nCheckOut;
-	while (1) {
+	while (c->nCheckOut < mdl->nThreads) {
 		mpc_wait(&mdl->midRcv,&nBytes);
 		mdlCacheReceive(mdl,NULL);
 		if (c->nCheckOut == mdl->nThreads) break;
 		id = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
 		}	
 	/*
 	 ** Do an explicit synchronize for safety reasons, after this
@@ -813,14 +823,15 @@ void mdlFinishCache(MDL mdl,int cid)
 	 ** See if we need to post another nonblocking receive!
 	 */
 	bLast = 1;
-	for (i=0;i<mdl->nCacheIds;++i) {
+	for (i=0;i<mdl->nMaxCacheIds;++i) {
 		if (mdl->cache[i].iType != MDL_NOCACHE) bLast = 0;
 		}
-	if (!bLast) {
+	if (!bLast && mdl->nThreads > 1) {
 		id = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
 		}
+printf("%d:exit FinishCache\n",mdl->idSelf);
 	}
 
 
@@ -833,19 +844,23 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	int idRcv,iTag,msgid,ret,nBytes;
 	char ach[80];
 
+printf("%d:enter Aquire\n",mdl->idSelf);
 	if (++c->nAccess == MDL_CHECK_INTERVAL) {
+	    if (mdl->nThreads > 1) {
 		if (mpc_status(mdl->midRcv) >= 0) {
 			mdlCacheReceive(mdl,NULL);
 			idRcv = mdl->dontcare;
 			iTag = MDL_TAG_CACHECOM;
-			mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
+			mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
 			}
-		c->nAccess = 0;
 		}
+	  c->nAccess = 0;
+	  }
 	/*
 	 ** Is it a local request?
 	 */
 	if (id == mdl->idSelf) {
+printf("%d:exit Aquire: local\n",mdl->idSelf);
 		return(&c->pData[iIndex*c->iDataSize]);
 		}
 	/*
@@ -936,8 +951,11 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		 */
 		idRcv = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pvRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
-		if (ret) return(&pLine[iElt*c->iDataSize]);
+		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
+		if (ret) {
+printf("%d:exit Aquire: rpl received\n",mdl->idSelf);
+		  return(&pLine[iElt*c->iDataSize]);
+                  }
 		}
 	}
 
