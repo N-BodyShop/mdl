@@ -51,9 +51,7 @@ void mdlBarrier(MDL mdl)
     if (MDLnInBar == mdl->nThreads) {
 	++MDLnEpisode;
 	MDLnInBar = 0;
-	pthread_mutex_unlock(&MDLmuxBar);
 	pthread_cond_broadcast(&MDLsigBar);
-	return;
 	}
     else {
 	while(MDLnEpisode == iEpisode) {
