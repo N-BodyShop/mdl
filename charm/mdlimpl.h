@@ -183,12 +183,12 @@ class AMdl : public CBase_AMdl
 {
 public:
     struct {			/* state data for mdlSwap() */
-	int nInBytes;
-	int nOutBytes;
-	int nBufBytes;
-	int nOutBufBytes;
-	int nRcvBytes;
-	int nSndBytes;
+	size_t nInBytes;
+	size_t nOutBytes;
+	size_t nBufBytes;
+	size_t nOutBufBytes;
+	size_t nRcvBytes;
+	size_t nSndBytes;
 	int id;
 	char *pszOut;
 	char *pszIn;
@@ -213,7 +213,7 @@ public:
 
     void AMdlInit(void *fcnPtr);
     AMdl(CkMigrateMessage*) {}
-    void swapInit(int, int);
+    void swapInit(size_t, size_t);
     void swapSendMore();
     void swapGetMore(MdlSwapMsg *);
     void swapDone();
