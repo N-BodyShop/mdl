@@ -648,6 +648,25 @@ void AdjustDataSize(MDL mdl)
 		}
 	}
 
+/*
+ ** Special MDL memory allocation functions for allocating memory 
+ ** which must be visible to other processors thru the MDL cache 
+ ** functions.
+ ** mdlMalloc() is defined to return a pointer to AT LEAST iSize bytes 
+ ** of memory. This pointer will be passed to either mdlROcache or 
+ ** mdlCOcache as the pData parameter.
+ ** For PVM and most machines these functions are trivial, but on the 
+ ** T3D and perhaps some future machines these functions are required.
+ */
+void *mdlMalloc(MDL mdl,int iSize)
+{	
+	return(malloc(iSize));
+	}
+
+void mdlFree(MDL mdl,void *p)
+{
+	free(p);
+	}
 
 /*
  ** Initialize a caching space.
@@ -1028,21 +1047,40 @@ void mdlRelease(MDL mdl,int cid,void *p)
 		}
 	}
 
-
-void mdlCacheStat(MDL mdl,int cid,CASTAT *pStat)
+double mdlNumAccess(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
 
-	pStat->dAccess = c->nAccHigh*1e9 + c->nAccess;
-	pStat->dMissRatio = c->nMiss/pStat->dAccess;
-	pStat->dMinRatio = c->nMin/pStat->dAccess;
-	pStat->dCollRatio = c->nColl/pStat->dAccess;
+	return(c->nAccHigh*1e9 + c->nAccess);
 	}
 
 
+double mdlMissRatio(MDL mdl,int cid)
+{
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
+	
+	if (dAccess > 0.0) return(c->nMiss/dAccess);
+	else return(0.0);
+	}
 
 
+double mdlCollRatio(MDL mdl,int cid)
+{
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
+
+	if (dAccess > 0.0) return(c->nColl/dAccess);
+	else return(0.0);
+	}
 
 
+double mdlMinRatio(MDL mdl,int cid)
+{
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
 
+	if (dAccess > 0.0) return(c->nMin/dAccess);
+	else return(0.0);
+	}
 
