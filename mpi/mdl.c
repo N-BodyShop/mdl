@@ -1058,7 +1058,7 @@ void mdlFinishCache(MDL mdl,int cid)
 		/*
 		 * Extra checkout to let everybody finish before
 		 * flushes start.
-		 */
+		* I think this makes for bad synchronizes --trq
 		caOut.cid = cid;
 		caOut.mid = MDL_MID_CACHEOUT;
 		caOut.id = mdl->idSelf;
@@ -1072,6 +1072,7 @@ void mdlFinishCache(MDL mdl,int cid)
 		while(c->nCheckOut < mdl->nThreads)
 		    mdlCacheReceive(mdl, NULL);
 		c->nCheckOut = 0;
+		 */
 		/*
 		 ** Must flush all valid data elements.
 		 */
