@@ -187,7 +187,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 				}
 			(*fcnChild)(mdl);
 			mdlFinish(mdl);
-			return (0);
+			exit(0);
 			}
 		}
 	else {
@@ -302,6 +302,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 ** Start bilateral transfers. Note: One processor is GUARANTEED to 
 	 ** complete all its transfers.
 	 */
+	assert(nBufBytes >= nOutBytes);
 	pszOut = &pszBuf[nBufBytes-nOutBytes];
 	pszIn = pszBuf;
 	while (nOutBytes && nInBytes) {
@@ -323,6 +324,8 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		pid = id;
 		MPI_Recv(pszIn,nInMax,MPI_CHAR,pid,iTag,MPI_COMM_WORLD,
 			 &status);
+		MPI_Get_count(&status, MPI_CHAR, &nBytes);
+		assert(nBytes == nInMax);
 		MPI_Wait(&request, &status);
 		/*
 		 ** Adjust pointers and counts for next itteration.
@@ -358,6 +361,8 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		iTag = MDL_TAG_SWAP;
 		MPI_Recv(pszIn,nInMax,MPI_CHAR,id,iTag,MPI_COMM_WORLD,
 			 &status);
+		MPI_Get_count(&status, MPI_CHAR, &nBytes);
+		assert(nBytes == nInMax);
 		pszIn = &pszIn[nInMax];
 		nInBytes -= nInMax;
 		nBufBytes -= nInMax;
@@ -582,6 +587,12 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->iDataSize = iDataSize;
 	c->nData = nData;
 	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
+	c->iKeyShift = 0;
+	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
+	if(c->iKeyShift < MDL_CACHELINE_BITS)
+	    c->iKeyShift = 0;
+	else
+	    c->iKeyShift -= MDL_CACHELINE_BITS;
 	/*
 	 ** Determine the number of cache lines to be allocated.
 	 */
@@ -589,6 +600,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	assert(c->nLines < MDL_RANDMOD);
 	c->nTrans = 1;
 	while(c->nTrans < c->nLines) c->nTrans *= 2;
+	c->nTrans *= 2;
 	c->iTransMask = c->nTrans-1;
 	/*
 	 **	Set up the translation table.
@@ -614,6 +626,10 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->nMiss = 0;				/* !!!, not NB */
 	c->nColl = 0;				/* !!!, not NB */
 	c->nMin = 0;				/* !!!, not NB */	
+	c->nKeyMax = 500;				/* !!!, not NB */
+	c->pbKey = malloc(c->nKeyMax);			/* !!!, not NB */
+	assert(c->pbKey != NULL);			/* !!!, not NB */
+	for (i=0;i<c->nKeyMax;++i) c->pbKey[i] = 0;	/* !!!, not NB */
 	/*
 	 ** Allocate cache data lines.
 	 */
@@ -647,6 +663,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	 */
 	free(c->pTrans);
 	free(c->pTag);
+	free(c->pbKey);
 	free(c->pLine);
 	c->iType = MDL_NOCACHE;
 	}
@@ -658,28 +675,21 @@ void mdlCacheCheck(MDL mdl)
 	return;
 	}
 
+void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock);
+
 void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 {
 	CACHE *c = &mdl->cache[cid];
 	char *pLine;
-	int iElt,iLine,i,iKey,iKeyVic,nKeyNew;
-	int iVictim,*pi;
-	int idRcv,iTag,ret,nBytes;
-	char ach[80];
-	long iLineSize_64,iLineSize_8;
+	int iElt,i,iKey;
+	int iLine;
 
 	++c->nAccess;
 	/*
-	 ** Is it a local request?
-	 */
-	if (id == mdl->idSelf) {
-		return(&c->pData[iIndex*c->iDataSize]);
-		}
-	/*
 	 ** Determine memory block key value and cache line.
-	 */
-	iLine = iIndex >> MDL_CACHELINE_BITS;
 	iKey = iLine*mdl->nThreads + id;
+	 */
+	iKey = ((iIndex&MDL_INDEX_MASK) << c->iKeyShift)| id;
 	/*
 	 ** Consider the following:
 	 ** iKey = (iIndex << c->iKeyShift) | id;
@@ -690,7 +700,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 */
 	if (c->pTag[i].iKey == iKey) {
 		++c->pTag[i].nLock;
-		c->pTag[i].nLast = c->nAccess;
 		pLine = &c->pLine[i*c->iLineSize];
 		iElt = iIndex & MDL_CACHE_MASK;
 		return(&pLine[iElt*c->iDataSize]);
@@ -703,7 +712,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		++c->nColl;
 		if (c->pTag[i].iKey == iKey) {
 			++c->pTag[i].nLock;
-			c->pTag[i].nLast = c->nAccess;
 			pLine = &c->pLine[i*c->iLineSize];
 			iElt = iIndex & MDL_CACHE_MASK;
 			return(&pLine[iElt*c->iDataSize]);
@@ -711,9 +719,75 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		i = c->pTag[i].iLink;
 		}
 	/*
+	 ** Is it a local request?
+	 */
+	if (id == mdl->idSelf) {
+		return(&c->pData[iIndex*c->iDataSize]);
+		}
+	return(doMiss(mdl, cid, iIndex, id, iKey, 1));
+}
+
+void *mdlSteal(MDL mdl,int cid,int iIndex,int id)
+{
+	CACHE *c = &mdl->cache[cid];
+	char *pLine;
+	int iElt,i,iKey;
+	int iLine;
+
+	++c->nAccess;
+	/*
+	 ** Determine memory block key value and cache line.
+	 */
+	iKey = ((iIndex&MDL_INDEX_MASK) << c->iKeyShift)| id;
+	/*
+	 ** Consider the following:
+	 ** iKey = (iIndex << c->iKeyShift) | id;
+	 */
+	i = c->pTrans[iKey & c->iTransMask];
+	/*
+	 ** Check for a match!
+	 */
+	if (c->pTag[i].iKey == iKey) {
+		pLine = &c->pLine[i*c->iLineSize];
+		iElt = iIndex & MDL_CACHE_MASK;
+		return(&pLine[iElt*c->iDataSize]);
+		}
+	i = c->pTag[i].iLink;
+	/*
+	 ** Collision chain search.
+	 */
+	while (i) {
+		++c->nColl;
+		if (c->pTag[i].iKey == iKey) {
+			pLine = &c->pLine[i*c->iLineSize];
+			iElt = iIndex & MDL_CACHE_MASK;
+			return(&pLine[iElt*c->iDataSize]);
+			}
+		i = c->pTag[i].iLink;
+		}
+	/*
+	 ** Is it a local request?
+	 */
+	if (id == mdl->idSelf) {
+		return(&c->pData[iIndex*c->iDataSize]);
+		}
+	return(doMiss(mdl, cid, iIndex, id, iKey, 0));
+}
+
+void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
+{
+	CACHE *c = &mdl->cache[cid];
+	char *pLine;
+	int iElt,iLine,i,iKeyVic,nKeyNew;
+	int iVictim,*pi;
+	char ach[80];
+	long iLineSize_64,iLineSize_8;
+
+	/*
 	 ** Cache Miss.
 	 */
 	++c->nMiss;
+	iLine = iIndex >> MDL_CACHELINE_BITS;
 	/*
 	 **	Victim Search!
 	 ** Note: if more than 1771875 cache lines are present this random
@@ -744,8 +818,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 				*pi = c->pTag[iVictim].iLink;
 				}
 			c->pTag[iVictim].iKey=iKey;
-			c->pTag[iVictim].nLock = 1;
-			c->pTag[iVictim].nLast = c->nAccess;
+			if(lock)
+			    c->pTag[iVictim].nLock = 1;
 			/*
 			 **	Add the modified victim tag back into the cache.
 			 ** Note: the new element is placed at the head of the chain.
@@ -764,6 +838,21 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	mdlDiag(mdl,ach);
 	exit(1);
  Await:
+	/*
+	 ** Figure out whether this is a "new" miss.
+	 ** This is for statistics only!
+	 */
+	if (iKey >= c->nKeyMax) {			/* !!! */
+		nKeyNew = iKey+500;
+		c->pbKey = realloc(c->pbKey,nKeyNew);
+		assert(c->pbKey != NULL);
+		for (i=c->nKeyMax;i<nKeyNew;++i) c->pbKey[i] = 0;
+		c->nKeyMax = nKeyNew;
+		}
+	if (!c->pbKey[iKey]) {
+		c->pbKey[iKey] = 1;
+		++c->nMin;
+		}								/* !!! */
 	/*
 	 ** At this point 'pLine' is the recipient cache line for the 
 	 ** data requested from processor 'id'.
@@ -837,13 +926,6 @@ double mdlMinRatio(MDL mdl,int cid)
 	CACHE *c = &mdl->cache[cid];
 	double dAccess = c->nAccHigh*1e9 + c->nAccess;
 
-	return(0.0);
+	if (dAccess > 0.0) return(c->nMin/dAccess);
+	else return(0.0);
 	}
-
-
-
-
-
-
-
-

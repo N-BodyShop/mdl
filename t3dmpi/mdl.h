@@ -6,10 +6,11 @@
 
 #define SRV_STOP		0
 
-#define MDL_CACHE_SIZE		1000000
+#define MDL_CACHE_SIZE		100000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
+#define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
 
 typedef struct cacheTag {
 	int iKey;
@@ -28,6 +29,7 @@ typedef struct cacheSpace {
 	int nLines;
 	int nTrans;
 	int iTransMask;
+        int iKeyShift;
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
@@ -43,6 +45,7 @@ typedef struct cacheSpace {
 	long nColl;
 	long nMin;
 	int nKeyMax;
+	char *pbKey;
 	} CACHE;
 
 typedef struct serviceRec {
@@ -105,6 +108,7 @@ void mdlFinishCache(MDL,int);
 void mdlCacheCheck(MDL);
 void *mdlAquire(MDL,int,int,int);
 void mdlRelease(MDL,int,void *);
+void *mdlSteal(MDL mdl,int cid,int iIndex,int id);
 /*
  ** Cache statistics functions.
  */
