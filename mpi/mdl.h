@@ -137,16 +137,23 @@ typedef struct mdlContext {
 void mdlprintf( MDL mdl, const char *format, ... );
 
 #ifdef MDLASSERT
-#ifndef __STRING
-#define __STRING( arg )   (("arg"))
-#endif
+#ifdef __ANSI_CPP__
 #define mdlassert(mdl,expr) \
     { \
       if (!(expr)) { \
-             mdlprintf( mdl, "%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, __STRING(expr) ); \
+             mdlprintf( mdl, "%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, # expr ); \
              assert( expr ); \
              } \
     }
+#else
+#define mdlassert(mdl,expr) \
+    { \
+      if (!(expr)) { \
+             mdlprintf( mdl, "%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, "expr" ); \
+             assert( expr ); \
+             } \
+    }
+#endif
 #else
 #define mdlassert(mdl,expr)  assert(expr)
 #endif
