@@ -1,7 +1,7 @@
 #ifndef MDL_HINCLUDED
 #define MDL_HINCLUDED
 #include <stdio.h>
-#include <mpp/mpi.h>
+#include <mpi.h>
 
 
 #define SRV_STOP		0
@@ -19,18 +19,6 @@ typedef struct cacheTag {
 	int iLink;
 	} CTAG;
 
-/*
- ** This structure should be "maximally" aligned, with 4 ints it
- ** should align up to at least QUAD word, which should be enough.
- */
-typedef struct cacheHeader {
-	int cid;
-	int mid;
-	int id;
-	int iLine;
-	} CAHEAD;
-
-
 typedef struct cacheSpace {
 	int iType;
 	char *pData;
@@ -43,9 +31,7 @@ typedef struct cacheSpace {
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
-	int nCheckIn;
-	int nCheckOut;
-	CAHEAD caReq;
+        long pDataMax;
 	void (*init)(void *);
 	void (*combine)(void *,void *);
 	/*	
@@ -57,17 +43,7 @@ typedef struct cacheSpace {
 	long nColl;
 	long nMin;
 	int nKeyMax;
-	char *pbKey;
 	} CACHE;
-
-
-typedef struct cacheStats {
-	double dAccess;
-	double dMissRatio;
-	double dCollRatio;
-	double dMinRatio;
-	} CASTAT;
-
 
 typedef struct serviceRec {
 	int nInBytes;
@@ -82,8 +58,6 @@ typedef struct mdlContext {
 	int idSelf;
 	int bDiag;
 	FILE *fpDiag;
-	int dontcare;
-	int allgrp;
 	/*
 	 ** Services stuff!
 	 */
@@ -102,12 +76,6 @@ typedef struct mdlContext {
 	 */
 	unsigned long uRand;
 	int iMaxDataSize;
-	int iCaBufSize;
-	char *pszRcv;
-	int midRcv;
-	int *pmidRpl;
-	MPI_Request *pReqRpl;
-	char **ppszRpl;
 	int nMaxCacheIds;
 	CACHE *cache;
 	} * MDL;
@@ -128,6 +96,8 @@ void mdlHandler(MDL);
 /*
  ** Caching functions.
  */
+void *mdlMalloc(MDL,int);
+void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
