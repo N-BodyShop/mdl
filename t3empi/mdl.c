@@ -35,7 +35,7 @@
 
 #define MDL_MAX_PES                 2048
 
-static long shmem_array[MDL_MAX_PES];
+static size_t shmem_array[MDL_MAX_PES];
 #pragma _CRI cache_align pSync
 static long pSync[_SHMEM_COLLECT_SYNC_SIZE];
 
@@ -228,6 +228,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 		fprintf(stderr,"         processors as specified in environment.\n");
 		fflush(stderr);
 		}
+	start_pes(0);
 	MPI_Init(0, NULL);
 
 	MPI_Comm_size(MPI_COMM_WORLD, &mdl->nThreads);
@@ -691,16 +692,19 @@ void AdjustDataSize(MDL mdl)
 void *mdlMalloc(MDL mdl,int iSize)
 {
     int i;
-    long shmax;
+    size_t shmax;
+    void *ptr;
+    size_t sSize = iSize; /* get to correct type for collect */
 
     MPI_Barrier(MPI_COMM_WORLD);
-    shmem_fcollect(shmem_array,(long *)&iSize,1,0,0,mdl->nThreads,pSync);
+    shmem_fcollect64(shmem_array,&sSize,1,0,0,mdl->nThreads,pSync);
     shmax=0;
     for (i=0;i<mdl->nThreads;++i) {
 	if (shmax < shmem_array[i]) shmax=shmem_array[i];
     }
     MPI_Barrier(MPI_COMM_WORLD);
-    return(shmalloc(shmax));
+    ptr = shmalloc(shmax);
+    return(ptr);
 }
 
 void mdlFree(MDL mdl,void *p)
@@ -814,6 +818,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	CACHE *c;
 	int i,id;
 	CAHEAD caIn;
+	size_t sData = nData;
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_ROCACHE;
@@ -859,7 +864,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	    }	
 	mdlDiag(mdl, "After RO sync\n");
 	AdjustDataSize(mdl);
-	shmem_fcollect(shmem_array,(long *)&nData,1,0,0,mdl->nThreads,pSync);
+	shmem_fcollect64(shmem_array,&sData,1,0,0,mdl->nThreads,pSync);
 	c->pDataMax=0;
         for (i=0;i<mdl->nThreads;++i) {
 	    if (c->pDataMax < shmem_array[i]) c->pDataMax=shmem_array[i];
@@ -877,6 +882,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	CACHE *c;
 	int i,id;
 	CAHEAD caIn;
+	size_t sData = nData;
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_COCACHE;
@@ -918,7 +924,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		    }	
 	    }	
 	AdjustDataSize(mdl);
-	shmem_fcollect(shmem_array,(long *)&nData,1,0,0,mdl->nThreads,pSync);
+	shmem_fcollect64(shmem_array,&sData,1,0,0,mdl->nThreads,pSync);
 	c->pDataMax=0;
         for (i=0;i<mdl->nThreads;++i) {
 	    if (c->pDataMax < shmem_array[i]) c->pDataMax=shmem_array[i];
@@ -1232,7 +1238,7 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 	assert( (iLineSize_8%sizeof(long)) == 0 );
 	iLineSize_64=iLineSize_8/sizeof(long);
 
-	shmem_get((long *)pLine,(long *)(c->pData + iLine*c->iLineSize),
+	shmem_get64((long *)pLine,(long *)(c->pData + iLine*c->iLineSize),
 			  iLineSize_64,id);
 
 	if (c->iType == MDL_COCACHE && c->init) {
