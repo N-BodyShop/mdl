@@ -613,6 +613,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	MPI_Status status;
 	int ret;
 	int iLineSize;
+	int iDataSize;
 #if 0
 	char achDiag[256];
 #endif
@@ -665,11 +666,6 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		break;
 	case MDL_MID_CACHEFLSH:
 		assert(c->iType == MDL_COCACHE);
-		/*
-		 ** Unpack the data into the 'sentinel-line' cache data.
-		 */
-		iLineSize = c->iLineSize;
-		for (i=0;i<iLineSize;++i) c->pLine[i] = pszRcv[i];
 		i = ph->iLine*MDL_CACHELINE_ELTS;
 		t = &c->pData[i*c->iDataSize];
 		/*
@@ -679,8 +675,9 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		if (n > c->nData) n = c->nData;
 		n -= i;
 		n *= c->iDataSize;
-		for (i=0;i<n;i+=c->iDataSize) {
-			(*c->combine)(&t[i],&c->pLine[i]);
+		iDataSize = c->iDataSize;
+		for (i=0;i<n;i+=iDataSize) {
+			(*c->combine)(&t[i],&pszRcv[i]);
 			}
 		ret = 0;
 		break;
