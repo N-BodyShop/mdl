@@ -278,7 +278,7 @@ void BasicDestroy(MDL mdl)
     }
 
 
-int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
+int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 {
     MDL mdl,tmdl;
     int i,nThreads=1,bThreads,bDiag;
@@ -378,7 +378,9 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 			/*
 			 ** Start all the children.
 			 */
-			pthread_create(&mdl->pt[i],&attr,fcnChild,mdl->pmdl[i]);
+			pthread_create(&mdl->pt[i],&attr,
+				       (void *(*)(void *))fcnChild,
+				       mdl->pmdl[i]);
 			}
 		}
     else {
