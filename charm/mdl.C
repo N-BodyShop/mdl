@@ -629,7 +629,7 @@ AMdl::swapGetMore(MdlSwapMsg *mesg)
     CProxy_AMdl proxyAmdl(aId);
     int nBytes = mesg->nBytes;	// temporary for bytes transferred
     
-    if(swapData.pszIn + nBytes > swapData.pszOut) {
+    while(swapData.pszIn + nBytes > swapData.pszOut) {
 	CthYield();		// pause while buffer is transferred out
 	}
 
