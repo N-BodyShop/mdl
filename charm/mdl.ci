@@ -23,7 +23,7 @@ mainmodule mdl {
   };
 
   group treeMap {
-	entry treeMap();
+	entry treeMap(int);
   };
 
   array [1D] AMdl {

@@ -35,7 +35,6 @@ typedef struct cacheHeader {
     int rid;	// proc. id to which request is being made
     int id; 	// id of requesting processor
     int iNode;  // node of requesting processor
-    int iPe;    // PE of requesting processor
     int iLine;
     } CAHEAD;
 
@@ -91,6 +90,7 @@ void AMPI_Main(int argc, char **);
 class Main : public Chare
 {
     int nfinished;
+    int nThreads;
     
 public:
     Main(CkArgMsg* m);
@@ -141,12 +141,12 @@ typedef struct cacheSpace {
 	char *pbKey;
     } CACHE;
 
+#define MAXELEM 32
+
 class grpCache : public NodeGroup 
 {
  public:
     int nMaxCacheIds;
-    int iMaxDataSize;
-    int iCaBufSize;
     CACHE *cache;
     CmiNodeLock lock;
     CthThreadStruct * threadBarrier;
@@ -154,24 +154,34 @@ class grpCache : public NodeGroup
     int idFlushing;
     CthThreadStruct ** threadCache;
     MdlCacheMsg **msgCache;
+    int nElem;			/* number of array elements in this
+				   group */
+    int vecIndex[MAXELEM];
     
     grpCache();
     void CacheInitialize(int cid,void *pData,int iDataSize,int nData,
-		    void (*init)(void *),void (*combine)(void *,void *));
-    void AdjustDataSize();
+			 void (*init)(void *),void (*combine)(void *,void *),
+			 int iRank, int nThread);
     void CacheRequest(MdlCacheMsg *mesg);
     void CacheReply(MdlCacheMsg *mesg);
     MdlCacheMsg *waitCache(int iRank) ;
     void flushreply();
     void waitflush();
-    void FinishCache(int cid, int idSelf);
+    void FinishCache(int cid, int idSelf, int nThreads);
+    int elementRegister(int index);
+    inline int indexRank(int index) 
+	{
+	    for(int i = 0; i < nElem; i++) {
+		if(index == vecIndex[i])
+		    return i;
+		}
+	    return -1;
+	    }
 };
 
 void mdlSetup(MDL *pmdl, int bDiag, const char *);
 
 PUPbytes(void *);
-
-class treeMap;
 
 // class AMdl : public ArrayElement1D
 class AMdl : public CBase_AMdl
@@ -199,7 +209,7 @@ public:
     int idReplyWait;
     int nInBar;
     int nFlush;
-    treeMap *procMap;
+    int iMyRank;
     
     MDL mdl;
     AMdl(int bDiag, const std::string& progname);

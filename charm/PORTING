@@ -63,3 +63,14 @@ nice to have:
 4) A way of ranking the array elements on a node.
 
 This is in addition to the mapping from array element to processor.
+
+8/28: Suggestions from Sanjay:
+
+- Tom's Nodegroup-aware MDL works; but not with multiple
+array elements per processor.  One key trick for
+supporting multiple array elements per processor is to
+have each array element "register" itself with the
+local nodegroup during the array element constructor,
+and to deregister during the destructor.  This lets the
+nodegroup itself keep a list of local array elements.
+

@@ -26,8 +26,6 @@ typedef struct mdlContext {
 	int idSelf;
 	AMdl *pSelf;
 	int iNodeSelf;
-        int iPeSelf;
-        int iRankSelf;
 	int bDiag;
 	FILE *fpDiag;
 	/*
