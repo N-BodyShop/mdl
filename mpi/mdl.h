@@ -2,16 +2,13 @@
 #define MDL_HINCLUDED
 #include <stdio.h>
 #include <assert.h>
-
-#ifdef __osf__
-#define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
-#endif
 #include "mpi.h"
 
 
 #define SRV_STOP		0
 
-#define MDL_CACHE_SIZE		4000000
+#define MDL_CACHE_SIZE		100000000
+//#define MDL_CACHE_SIZE		  1000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
@@ -43,6 +40,7 @@ typedef struct cacheSpace {
 	int nData;
 	int iLineSize;
 	int nLines;
+    int iLine;
 	int nTrans;
 	int iTransMask;
         int iKeyShift;
@@ -135,9 +133,7 @@ typedef struct mdlContext {
  * Timer functions active: define MDLTIMER
  * Makes mdl timer functions active
  */
-#ifndef _CRAYMPP
 #define MDLTIMER
-#endif
 
 
 void mdlprintf( MDL mdl, const char *format, ... );
