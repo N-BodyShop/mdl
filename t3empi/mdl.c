@@ -939,6 +939,8 @@ void mdlFinishCache(MDL mdl,int cid)
 	int i,id;
 	char *t;
 	int j, iKey;
+	MPI_Status status;
+	MPI_Request reqFlsh;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
@@ -958,10 +960,11 @@ void mdlFinishCache(MDL mdl,int cid)
 				t = &c->pLine[i*c->iLineSize];
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
-				MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+				MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 					 MPI_CHAR, id, MDL_TAG_CACHECOM,
-					 MPI_COMM_WORLD); 
+					 MPI_COMM_WORLD, &reqFlsh); 
 				mdlCacheCheck(mdl); /* service incoming */
+				MPI_Wait(&reqFlsh, &status);
 				}
 			}
 		}
@@ -1129,6 +1132,8 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 	unsigned long iLineSize_64,iLineSize_8;
 	CAHEAD *caFlsh;
 	char *pszFlsh;
+	MPI_Status status;
+	MPI_Request reqFlsh;
 
 	/*
 	 ** Cache Miss.
@@ -1154,6 +1159,7 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 		 ** 'pLine' will point to the actual data line in the cache.
 		 */
 		pLine = &c->pLine[iVictim*c->iLineSize];
+		caFlsh = NULL;
 		if (iKeyVic >= 0) {
 			if (c->iType == MDL_COCACHE) {
 			    /*
@@ -1168,9 +1174,10 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 			    caFlsh->iLine = iKeyVic >> c->iInvKeyShift;
 			    for(i = 0; i < c->iLineSize; ++i)
 				pszFlsh[i] = pLine[i];
-			    MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+			    MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 				     MPI_CHAR, idVic,
-				     MDL_TAG_CACHECOM, MPI_COMM_WORLD); 
+				      MDL_TAG_CACHECOM,
+				      MPI_COMM_WORLD, &reqFlsh);
 			    }
 			/*
 			 ** If valid iLine then "unlink" it from the cache.
@@ -1242,6 +1249,8 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 			}
 		}
 
+	if(caFlsh)
+	    MPI_Wait(&reqFlsh, &status);
 	return(&pLine[iElt*c->iDataSize]);
 	}
 
