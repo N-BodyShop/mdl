@@ -23,14 +23,6 @@
 #define MDL_DEFAULT_SERVICES	50
 #define MDL_DEFAULT_CACHEIDS	5
 
-#define PVM_TRANS_SIZE		50000 
-#define MDL_TAG_INIT 		1
-#define MDL_TAG_SWAPINIT 	2
-#define MDL_TAG_SWAP		3
-#define MDL_TAG_REQ	   		4
-#define MDL_TAG_RPL			5
-
-
 void _srvNull(void *p1,void *vin,int nIn,void *vout,int *pnOut)
 {
 	return;
@@ -283,43 +275,7 @@ void mdlHandler(MDL mdl)
 	}
 
 
-#define MDL_TAG_CACHECOM	10
-#define MDL_MID_CACHEIN		1
-#define MDL_MID_CACHEREQ	2
-#define MDL_MID_CACHERPL	3
-#define MDL_MID_CACHEOUT	4
-#define MDL_MID_CACHEFLSH	5
-
-#define MDL_CHECK_MASK  	0x7f
 #define BILLION				1000000000
-
-
-void AdjustDataSize(MDL mdl)
-{
-	int i,iMaxDataSize;
-
-	/*
-	 ** Change buffer size?
-	 */
-	iMaxDataSize = 0;
-	for (i=0;i<mdl->nMaxCacheIds;++i) {
-		if (mdl->cache[i].iType == MDL_NOCACHE) continue;
-		if (mdl->cache[i].iDataSize > iMaxDataSize) {
-			iMaxDataSize = mdl->cache[i].iDataSize;
-			}
-		}
-	if (iMaxDataSize != mdl->iMaxDataSize) {
-		/*
-		 ** Create new buffer with realloc?
-		 ** Be very careful when reallocing buffers in other libraries
-		 ** (not PVM) to be sure that the buffers are not in use!
-		 ** A pending non-blocking receive on a buffer which is realloced
-		 ** here will cause problems, make sure to take this into account!
-		 */
-		mdl->iMaxDataSize = iMaxDataSize;
-		}
-	}
-
 
 /*
  ** Special MDL memory allocation functions for allocating memory 
@@ -376,64 +332,11 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->pData = pData;
 	c->iDataSize = iDataSize;
 	c->nData = nData;
-	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
-	/*
-	 ** Determine the number of cache lines to be allocated.
-	 */
-	c->nLines = (MDL_CACHE_SIZE/c->iDataSize) >> MDL_CACHELINE_BITS;
-	c->nTrans = 1;
-	while(c->nTrans < c->nLines) c->nTrans *= 2;
-	c->iTransMask = c->nTrans-1;
-	/*
-	 **	Set up the translation table.
-	 */
-	c->pTrans = malloc(c->nTrans*sizeof(int));	
-	assert(c->pTrans != NULL);
-	for (i=0;i<c->nTrans;++i) c->pTrans[i] = 0;
-	/*
-	 ** Set up the tags. Note pTag[0] is a Sentinel!
-	 */
-	c->pTag = malloc(c->nLines*sizeof(CTAG));
-	assert(c->pTag != NULL);
-	for (i=0;i<c->nLines;++i) {
-		c->pTag[i].iKey = -1;	/* invalid */	
-		c->pTag[i].nLock = 0;
-		c->pTag[i].nLast = 0;
-		c->pTag[i].iLink = 0;
-		}
-	c->pTag[0].nLock = 1;			/* always locked */
-	c->pTag[0].nLast = INT_MAX;  	/* always Most Recently Used */
 	c->nAccess = 0;
 	c->nAccHigh = 0;
 	c->nMiss = 0;
 	c->nColl = 0;
 	c->nMin = 0;
-	c->nKeyMax = 500;
-	c->pbKey = malloc(c->nKeyMax);
-	assert(c->pbKey != NULL);
-	for (i=0;i<c->nKeyMax;++i) c->pbKey[i] = 0;
-	/*
-	 ** Allocate cache data lines.
-	 */
-	c->pLine = malloc(c->nLines*c->iLineSize);
-	assert(c->pLine != NULL);
-	c->req[0] = cid;
-	c->req[1] = MDL_MID_CACHEREQ;
-	c->req[2] = mdl->idSelf;
-	c->rpl[0] = cid;
-	c->rpl[1] = MDL_MID_CACHERPL;
-	c->rpl[2] = mdl->idSelf;
-	c->chko[0] = cid;
-	c->chko[1] = MDL_MID_CACHEOUT;
-	c->chko[2] = mdl->idSelf;
-	c->chki[0] = cid;
-	c->chki[1] = MDL_MID_CACHEIN;
-	c->chki[2] = mdl->idSelf;
-	c->flsh[0] = cid;
-	c->flsh[1] = MDL_MID_CACHEFLSH;
-	c->flsh[2] = mdl->idSelf;
-	c->nCheckIn = 0;
-	c->nCheckOut = 0;
 	return(c);
 	}
 
@@ -449,7 +352,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->iType = MDL_ROCACHE;
 	c->init = NULL;
 	c->combine = NULL;
-	AdjustDataSize(mdl);
 	}
 
 
@@ -465,7 +367,6 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	c->iType = MDL_COCACHE;
 	c->init = init;
 	c->combine = combine;
-	AdjustDataSize(mdl);
 	}
 
 
@@ -476,12 +377,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	/*
 	 ** Free up storage and finish.
 	 */
-	free(c->pbKey);
-	free(c->pTrans);
-	free(c->pTag);
-	free(c->pLine);
 	c->iType = MDL_NOCACHE;
-	AdjustDataSize(mdl);
 	}
 
 void mdlCacheCheck(MDL mdl)
@@ -491,74 +387,15 @@ void mdlCacheCheck(MDL mdl)
 void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 {
 	CACHE *c = &mdl->cache[cid];
-	char *pLine;
-	int iElt,iLine,i,iKey;
 
 	++c->nAccess;
-	/*
-	 ** Determine memory block key value and cache line.
-	 */
-	iLine = iIndex >> MDL_CACHELINE_BITS;
-	iKey = iLine*mdl->nThreads + id;
-	/*
-	 ** Consider the following:
-	 ** iKey = (iIndex << c->iKeyShift) | id;
-	 */
-	i = c->pTrans[iKey & c->iTransMask];
-	/*
-	 ** Check for a match!
-	 */
-	if (c->pTag[i].iKey == iKey) {
-		++c->pTag[i].nLock;
-		c->pTag[i].nLast = c->nAccess;
-		pLine = &c->pLine[i*c->iLineSize];
-		iElt = iIndex & MDL_CACHE_MASK;
-		return(&pLine[iElt*c->iDataSize]);
-		}
-	i = c->pTag[i].iLink;
-	/*
-	 ** Collision chain search.
-	 */
-	while (i) {
-		++c->nColl;
-		if (c->pTag[i].iKey == iKey) {
-			++c->pTag[i].nLock;
-			c->pTag[i].nLast = c->nAccess;
-			pLine = &c->pLine[i*c->iLineSize];
-			iElt = iIndex & MDL_CACHE_MASK;
-			return(&pLine[iElt*c->iDataSize]);
-			}
-		i = c->pTag[i].iLink;
-		}
-	/*
-	 ** Is it a local request?
-	 */
-	if (id == mdl->idSelf) {
-		return(&c->pData[iIndex*c->iDataSize]);
-		}
-	assert(0);
-	return NULL;
+	assert(id == mdl->idSelf);
+	return(&c->pData[iIndex*c->iDataSize]);
 	}
 
 
 void mdlRelease(MDL mdl,int cid,void *p)
 {
-	CACHE *c = &mdl->cache[cid];
-	int iLine,iData;
-	
-	iLine = ((char *)p - c->pLine) / c->iLineSize;
-	/*
-	 ** Check if the pointer fell in a cache line, otherwise it
-	 ** must have been a local pointer.
-	 */
-	if (iLine > 0 && iLine < c->nLines) {
-		--c->pTag[iLine].nLock;
-		assert(c->pTag[iLine].nLock >= 0);
-		}
-	else {
-		iData = ((char *)p - c->pData) / c->iDataSize;
-		assert(iData >= 0 && iData < c->nData);
-		}
 	}
 
 
