@@ -343,8 +343,6 @@ AMdl::AMdl(int bDiag, const std::string& progname)
 	threadGetReply = 0;
 	nInBar = 0;
 	swapData.id = -1;
-	msgCache = NULL;
-	threadCache = 0;
     }
 
 void
@@ -862,17 +860,23 @@ grpCache::grpCache()
      */
     iMaxDataSize = 0;
     iCaBufSize = sizeof(CAHEAD);
+    msgCache = new (MdlCacheMsg *)[CkNodeSize(CkMyNode())];
+    threadCache = new (CthThreadStruct *)[CkNodeSize(CkMyNode())];
+    for(i = 0; i < CkNodeSize(CkMyNode()); i++) {
+	msgCache[i] = NULL;
+	threadCache[i] = 0;
+	}
     }
 
 void
-AMdl::CacheRequest(MdlCacheMsg *mesg)
+grpCache::CacheRequest(MdlCacheMsg *mesg)
 {
 	CACHE *c;
 	char *pszRpl;
 	char *t;
 	int i;
 	int iLineSize;
-	CProxy_AMdl proxyAMdl(aId);
+	CProxy_grpCache proxyCache(CacheId);
 	char *pData;
 	int nData;
 
@@ -880,8 +884,8 @@ AMdl::CacheRequest(MdlCacheMsg *mesg)
 	assert(c->iType != MDL_NOCACHE);
 	MdlCacheMsg *mesgRpl;
 
-	pData = c->procData[CmiMyRank()].pData;
-	nData = c->procData[CmiMyRank()].nData;
+	pData = c->procData[CmiRankOf(mesg->ch.rid)].pData;
+	nData = c->procData[CmiRankOf(mesg->ch.rid)].nData;
 	
 	t = &pData[mesg->ch.iLine*c->iLineSize];
 	if(t+c->iLineSize > pData + nData*c->iDataSize)
@@ -892,23 +896,26 @@ AMdl::CacheRequest(MdlCacheMsg *mesg)
 
 	pszRpl = mesgRpl->pszBuf;
 	mesgRpl->ch.cid = mesg->ch.cid;
-	mesgRpl->ch.id = this->mdl->idSelf;
+	mesgRpl->ch.id = mesg->ch.rid;
+	mesgRpl->ch.rid = mesg->ch.id;
 	for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
-	proxyAMdl[mesg->ch.id].CacheReply(mesgRpl);
+	proxyCache[CmiNodeOf(mesg->ch.id)].CacheReply(mesgRpl);
 	delete mesg;
     }
 
 void
-AMdl::CacheReply(MdlCacheMsg *mesg)
+grpCache::CacheReply(MdlCacheMsg *mesg)
 {
 	/*
 	 ** For now assume no prefetching!
 	 ** This means that this WILL be the reply to this Aquire
 	 ** request.
 	 */
-	msgCache = mesg;	// save message
-	if(threadCache)
-	    CthAwaken(threadCache);
+    int iRank = CmiRankOf(mesg->ch.rid);
+    
+    msgCache[iRank] = mesg;	// save message
+    if(threadCache[iRank])
+	CthAwaken(threadCache[iRank]);
     }
 
 void
@@ -1358,23 +1365,24 @@ void mdlCacheCheck(MDL mdl)
     }
 
 MdlCacheMsg *
-AMdl::waitCache() 
+grpCache::waitCache(int id) 
 {
     MdlCacheMsg * msgTmp;
+    int iRank = CmiRankOf(id);
     
-    if(msgCache) {
-	msgTmp = msgCache;
+    if(msgCache[iRank]) {
+	msgTmp = msgCache[iRank];
 	msgCache = NULL;
 	return msgTmp;
 	}
     else {
-	threadCache = CthSelf();
+	threadCache[iRank] = CthSelf();
 	CthSuspend();
 	}
-    assert(msgCache);
-    threadCache = 0;
-    msgTmp = msgCache;
-    msgCache = NULL;
+    assert(msgCache[iRank]);
+    threadCache[iRank] = 0;
+    msgTmp = msgCache[iRank];
+    msgCache[iRank] = NULL;
     return msgTmp;
     }
 
@@ -1462,10 +1470,13 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 
 	MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
 	mesg->ch.cid = cid;
+	mesg->ch.rid = id;
 	mesg->ch.id = mdl->idSelf;
 	mesg->ch.iLine = iLine;
 
-	proxyAMdl[id].CacheRequest(mesg);
+	CProxy_grpCache proxyCache(CacheId);
+
+	proxyCache[CmiNodeOf(id)].CacheRequest(mesg);
 	
 	++c->nMiss;
 	/*
@@ -1560,7 +1571,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	// The "bFetching" bit in the RO Cache also lets me unlock here.
 	CmiUnlock(*lock);
 
-	mesg = proxyAMdl[mdl->idSelf].ckLocal()->waitCache();
+	mesg = proxyCache.ckLocalBranch()->waitCache(mdl->idSelf);
 	assert(mesg->ch.id == id);
 	assert(mesg->ch.cid == cid);
 	

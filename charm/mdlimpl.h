@@ -31,11 +31,11 @@ typedef struct srvHeader {
  ** should align up to at least QUAD word, which should be enough.
  */
 typedef struct cacheHeader {
-	int cid;
-	int mid;
-	int id;
-	int iLine;
-	} CAHEAD;
+    int cid;	// Which cache
+    int rid;	// proc. id to which request is being made
+    int id; 	// id of requesting processor
+    int iLine;
+    } CAHEAD;
 
 class MdlMsg : public CMessage_MdlMsg 
 {
@@ -86,7 +86,7 @@ class MdlCacheFlshMsg : public CMessage_MdlCacheFlshMsg
 extern "C"
 void AMPI_Main(int argc, char **);
 
-class Main : public CBase_Main
+class Main : public Chare
 {
     int nfinished;
     
@@ -150,11 +150,16 @@ class grpCache : public NodeGroup
     CmiNodeLock lock;
     CthThreadStruct * threadBarrier;
     int nFlush;
+    CthThreadStruct ** threadCache;
+    MdlCacheMsg **msgCache;
     
     grpCache();
     void CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 		    void (*init)(void *),void (*combine)(void *,void *));
     void AdjustDataSize();
+    void CacheRequest(MdlCacheMsg *mesg);
+    void CacheReply(MdlCacheMsg *mesg);
+    MdlCacheMsg *waitCache(int) ;
     void flushreply();
     void waitflush();
     void FinishCache(int cid);
@@ -184,11 +189,9 @@ public:
     CthThreadStruct * threadGetReply;
     CthThreadStruct * threadSrvWait;
     CthThreadStruct * threadBarrier;
-    CthThreadStruct * threadCache;
     CACHE *cache;		/* pointer to nodegroup cache */
     CmiNodeLock *lock;		/* pointer to nodegroup lock */
     MdlMsg ** msgReply;
-    MdlCacheMsg *msgCache;
     int idReplyWait;
     int nInBar;
     int nFlush;
@@ -208,11 +211,8 @@ public:
     void stopSrv();
     void reqReply(MdlMsg * mesg);
     void reqHandle(MdlMsg * mesg);
-    void CacheRequest(MdlCacheMsg *mesg);
-    void CacheReply(MdlCacheMsg *mesg);
     void CacheFlush(MdlCacheMsg *mesg);
     void CacheFlushAll(MdlCacheFlshMsg *mesg);
-    MdlCacheMsg *waitCache() ;
     void barrier();
     void barrierEnter();
     void barrierRel();

@@ -17,6 +17,8 @@ mainmodule mdl {
 
   nodegroup grpCache {
     entry grpCache();
+    entry [immediate] void CacheRequest(MdlCacheMsg *mesg);
+    entry void CacheReply(MdlCacheMsg *mesg);
     entry void flushreply();
   };
 
@@ -35,8 +37,6 @@ mainmodule mdl {
     entry void stopSrv();
     entry [threaded] void reqHandle(MdlMsg *);
 //    entry void reqHandle(MdlMsg *);
-    entry void CacheRequest(MdlCacheMsg *mesg);
-    entry void CacheReply(MdlCacheMsg *mesg);
     entry void CacheFlush(MdlCacheMsg *mesg);
     entry void CacheFlushAll(MdlCacheFlshMsg *mesg);
     entry void barrierEnter();
