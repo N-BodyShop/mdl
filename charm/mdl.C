@@ -119,7 +119,7 @@ void mdlPrintTimer(MDL mdl,char *message, mdlTimer *t0)
  * The mainchare Main() is called first.
  * It will then call the main() for PKDGRAV which will call 
  * mdlInitialize()
- * Slite change: a threaded routine has to start main to keep things
+ * Slight change: a threaded routine has to start main to keep things
  * from blocking startMain() serves this purpose.
  * mdlInitialize will then call proxies on other processors which will
  * invoke fcnChild()
@@ -764,11 +764,8 @@ AMdl::reqHandle(MdlMsg * mesg)
 	    }
 	}
 
-#define MDL_TAG_CACHECOM	10
-#define MDL_MID_CACHEIN		1
 #define MDL_MID_CACHEREQ	2
 #define MDL_MID_CACHERPL	3
-#define MDL_MID_CACHEOUT	4
 #define MDL_MID_CACHEFLSH	5
 
 #define MDL_CHECK_MASK  	0x7f
@@ -791,14 +788,6 @@ AMdl::CacheReceive(MdlCacheMsg *mesg)
 	MdlCacheMsg *mesgRpl;
 	
 	switch (mesg->ch.mid) {
-	case MDL_MID_CACHEIN:
-		++c->nCheckIn;
-		delete mesg;
-		break;
-	case MDL_MID_CACHEOUT:
-		++c->nCheckOut;
-		delete mesg;
-		break;
 	case MDL_MID_CACHEREQ:
 		/*
 		 ** This is the tricky part! Here is where the real deadlock
@@ -810,7 +799,7 @@ AMdl::CacheReceive(MdlCacheMsg *mesg)
 			iLineSize = c->pData + c->nData*c->iDataSize - t;
 		else
 			iLineSize = c->iLineSize;
-		mesgRpl = new(&iLineSize, 0) MdlCacheMsg;
+		mesgRpl = new(&c->iLineSize, 0) MdlCacheMsg;
 		
 		pszRpl = mesgRpl->pszBuf;
 		mesgRpl->ch.cid = mesg->ch.cid;
@@ -1003,13 +992,6 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	 */
 	c->pLine = (char *) malloc(c->nLines*c->iLineSize);
 	assert(c->pLine != NULL);
-	c->nCheckOut = 0;
-	/*
-	 ** Set up the request message as much as possible!
-	 */
-	c->caReq.cid = cid;
-	c->caReq.mid = MDL_MID_CACHEREQ;
-	c->caReq.id = mdl->idSelf;
 	return(c);
 	}
 
@@ -1140,7 +1122,7 @@ void mdlFinishCache(MDL mdl,int cid)
 extern "C"
 void mdlCacheCheck(MDL mdl)
 {
-    // CthYield();
+    CthYield();
     }
 
 MdlCacheMsg *
@@ -1222,6 +1204,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 */
 	iLine = iIndex >> MDL_CACHELINE_BITS;
 	int nRequestBytes = 0;	// Just a place holder
+
 	MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
 	mesg->ch.cid = cid;
 	mesg->ch.mid = MDL_MID_CACHEREQ;
@@ -1272,14 +1255,14 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		        idVic = iKeyVic&c->iIdMask;
 			MdlCacheMsg *mesgFlsh = new(&c->iLineSize,0) MdlCacheMsg;
 			
-			pszFlsh = mesg->pszBuf;
+			pszFlsh = mesgFlsh->pszBuf;
 		        mesgFlsh->ch.cid = cid;
 			mesgFlsh->ch.mid = MDL_MID_CACHEFLSH;
 			mesgFlsh->ch.id = mdl->idSelf;
 			mesgFlsh->ch.iLine = iKeyVic >> c->iInvKeyShift;
 			for(i = 0; i < c->iLineSize; ++i)
 			    pszFlsh[i] = pLine[i];
-			proxyAMdl[idVic].CacheReceive(mesg);
+			proxyAMdl[idVic].CacheReceive(mesgFlsh);
 			}
 		/*
 		 ** If valid iLine then "unlink" it from the cache.
@@ -1312,16 +1295,22 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	if (!c->pbKey[iKey]) {
 		c->pbKey[iKey] = 1;
 		++c->nMin;
-		}								/* !!! */
+		}					/* !!! */
 	/*
 	 ** At this point 'pLine' is the recipient cache line for the 
 	 ** data requested from processor 'id'.
 	 */
 	
 	mesg = proxyAMdl[mdl->idSelf].ckLocal()->waitCache();
+	assert(mesg->ch.id == id);
+	assert(mesg->ch.cid == cid);
+	assert(mesg->ch.mid == MDL_MID_CACHERPL);
+	
 	char *pszLine = mesg->pszBuf;
 	for(i = 0; i < c->iLineSize; i++)
 	    pLine[i] = pszLine[i];
+	delete mesg;
+	
 	if (c->iType == MDL_COCACHE && c->init) {
 	    /*
 	    ** Call the initializer function for all elements in 
@@ -1331,8 +1320,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		(*c->init)(&pLine[i]);
 		}
 	    }
-	
-	delete mesg;
 	
 	return(&pLine[iElt*c->iDataSize]);
 	}

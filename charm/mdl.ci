@@ -8,13 +8,13 @@ mainmodule mdl {
 
   mainchare Main {
     entry Main(CkArgMsg *m);
-    entry [threaded] void startMain(CkArgMsg *m);
+    entry void startMain(CkArgMsg *m);
     entry void done(void);
   };
 
   array [1D] AMdl {
     entry AMdl(int, char *);
-    entry [threaded] void AMdlInit(void *fcnChild);
+    entry void AMdlInit(void *fcnChild);
     entry void swapInit(int, int);
     entry void swapSendMore();
     entry void swapGetMore(MdlSwapMsg *);

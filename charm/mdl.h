@@ -46,9 +46,6 @@ typedef struct cacheSpace {
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
-	int nCheckIn;
-	int nCheckOut;
-	CAHEAD caReq;
 	void (*init)(void *);
 	void (*combine)(void *,void *);
 	/*	
