@@ -38,33 +38,31 @@ int smp_num_cpus = 1;
  ** GLOBAL BARRIER VARIABLES! All threads must see these.
  */
 int MDLnInBar = 0;
+int MDLnEpisode = 0;
 pthread_mutex_t MDLmuxBar = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t MDLsigInBar = PTHREAD_COND_INITIALIZER;
-pthread_cond_t MDLsigOutBar = PTHREAD_COND_INITIALIZER;
+pthread_cond_t MDLsigBar = PTHREAD_COND_INITIALIZER;
 
 void mdlBarrier(MDL mdl)
 {
-	if (mdl->idSelf == 0) {
-		pthread_mutex_lock(&MDLmuxBar);
-		++MDLnInBar;
-		while (MDLnInBar < mdl->nThreads) {
-			pthread_cond_wait(&MDLsigInBar,&MDLmuxBar);
-			}
-		MDLnInBar = 0;
-		pthread_cond_broadcast(&MDLsigOutBar);
-		pthread_mutex_unlock(&MDLmuxBar);
-		}
-	else {
-		pthread_mutex_lock(&MDLmuxBar);
-		++MDLnInBar;
-		pthread_cond_signal(&MDLsigInBar);
-		while (MDLnInBar != 0) {
-			pthread_cond_wait(&MDLsigOutBar,&MDLmuxBar);
-			}
-		pthread_mutex_unlock(&MDLmuxBar);
-		}
+    int iEpisode;
+    
+    pthread_mutex_lock(&MDLmuxBar);
+    iEpisode = MDLnEpisode;
+    ++MDLnInBar;
+    if (MDLnInBar == mdl->nThreads) {
+	++MDLnEpisode;
+	MDLnInBar = 0;
+	pthread_mutex_unlock(&MDLmuxBar);
+	pthread_cond_broadcast(&MDLsigBar);
+	return;
 	}
-
+    else {
+	while(MDLnEpisode == iEpisode) {
+	    pthread_cond_wait(&MDLsigBar,&MDLmuxBar);
+	    }
+	}
+    pthread_mutex_unlock(&MDLmuxBar);
+    }
 
 void srvNull(void *p1,void *vin,int nIn,void *vout,int *pnOut)
 {
@@ -188,6 +186,18 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
     MDL mdl,tmdl;
     int i,nThreads,bThreads,bDiag;
     char *p,ach[256],achDiag[256];
+    pthread_attr_t attr;
+#ifdef TINY_PTHREAD_STACK
+    static int first = 1;
+    static MDL *save_mdl;
+    extern void *(main)(void *);
+    
+    if(!first) {
+        *pmdl = *save_mdl;
+        return (*pmdl)->nThreads;
+	}
+    first = 0;
+#endif
     
     *pmdl = NULL;
     /*
@@ -231,6 +241,13 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
     mdl->pt = (pthread_t *)malloc(nThreads*sizeof(pthread_t));
     assert(mdl->pt != NULL);
     *pmdl = mdl;
+    pthread_attr_init(&attr);
+#ifdef TINY_PTHREAD_STACK
+    /*
+     * Create 1 Meg stack.
+     */
+    pthread_attr_setstacksize(&attr, 10*1024*1024);
+#endif
     if (nThreads > 1) {
 		for (i=1;i<nThreads;++i) {
 			/*
@@ -261,9 +278,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 			/*
 			 ** Start all the children.
 			 */
-			pthread_create(&mdl->pt[i],NULL,fcnChild,mdl->pmdl[i]);
+			pthread_create(&mdl->pt[i],&attr,fcnChild,mdl->pmdl[i]);
 			}
-		return(nThreads);
 		}
     else {
 		/*
@@ -278,8 +294,16 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 			mdl->fpDiag = fopen(achDiag,"w");
 			assert(mdl->fpDiag != NULL);
 			}
-		return(nThreads);
 		}
+#ifdef TINY_PTHREAD_STACK
+    save_mdl = &mdl;
+    /*
+     * Restart myself with a bigger stack.
+     */
+    pthread_create(mdl->pt,&attr,main,mdl->pmdl[0]);
+    pthread_exit(0);
+#endif
+    return(nThreads);
     }
 
 
