@@ -564,12 +564,14 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 
 	MPI_Wait(&mdl->ReqRcv, &status);
 #if 0
-	sprintf(achDiag, "%d: cache %d, message %d rec top\n", mdl->idSelf,
-		ph->cid, ph->mid);
+	sprintf(achDiag, "%d: cache %d, message %d, from %d, rec top\n",
+		mdl->idSelf, ph->cid, ph->mid, ph->id);
 	mdlDiag(mdl, achDiag);
 #endif
 
 	c = &mdl->cache[ph->cid];
+	assert(c->iType != MDL_NOCACHE);
+	
 	switch (ph->mid) {
 	case MDL_MID_CACHEIN:
 		++c->nCheckIn;
@@ -589,6 +591,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		phRpl = (CAHEAD *)mdl->ppszRpl[ph->id];
 		phRpl->cid = ph->cid;
 		phRpl->mid = MDL_MID_CACHERPL;
+		phRpl->id = mdl->idSelf;
 		t = &c->pData[ph->iLine*c->iLineSize];
 		for (i=0;i<c->iLineSize;++i) pszRpl[i] = t[i];
 		if(mdl->pmidRpl[ph->id] != -1) {
@@ -798,10 +801,23 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
 	c->iKeyShift = 0;
 	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
-	if(c->iKeyShift < MDL_CACHELINE_BITS)
+	c->iIdMask = (1 << c->iKeyShift) - 1;
+	
+	if(c->iKeyShift < MDL_CACHELINE_BITS) {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) | id.
+	   */
+	    c->iInvKeyShift = MDL_CACHELINE_BITS;
 	    c->iKeyShift = 0;
-	else
+	    }
+	else {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) << KeyShift | id.
+	   */
+	    c->iInvKeyShift = c->iKeyShift;
 	    c->iKeyShift -= MDL_CACHELINE_BITS;
+	    }
+	
 	/*
 	 ** Determine the number of cache lines to be allocated.
 	 */
@@ -970,6 +986,8 @@ void mdlFinishCache(MDL mdl,int cid)
 	char *t;
 	int j, iKey;
 	int last;
+	MPI_Status status;
+	MPI_Request reqFlsh;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
@@ -984,17 +1002,34 @@ void mdlFinishCache(MDL mdl,int cid)
 				/*
 				 ** Flush element since it is valid!
 				 */
-				id = iKey%mdl->nThreads;
-				caFlsh->iLine = iKey/mdl->nThreads;
+				id = iKey & c->iIdMask;
+				caFlsh->iLine = iKey >> c->iInvKeyShift;
 				t = &c->pLine[i*c->iLineSize];
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
-				MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+				MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 					 MPI_BYTE, id, MDL_TAG_CACHECOM,
-					 MPI_COMM_WORLD); 
+					 MPI_COMM_WORLD, &reqFlsh); 
 				mdlCacheCheck(mdl); /* service incoming */
+				MPI_Wait(&reqFlsh, &status);
 				}
 			}
+		/*
+		 * Extra checkout to insure Flushes are all processed.
+		 */
+		caOut.cid = cid;
+		caOut.mid = MDL_MID_CACHEOUT;
+		caOut.id = mdl->idSelf;
+		for(id = 0; id < mdl->nThreads; id++) {
+		    if(id == mdl->idSelf)
+			continue;
+		    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
+			     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		    }
+		++c->nCheckOut;
+		while(c->nCheckOut < mdl->nThreads)
+		    mdlCacheReceive(mdl, NULL);
+		c->nCheckOut = 0;
 		}
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!
@@ -1084,6 +1119,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	char ach[80];
 	CAHEAD *caFlsh;
 	char *pszFlsh;
+	MPI_Status status;
+	MPI_Request reqFlsh;
 
 	++c->nAccess;
 	if (!(c->nAccess & MDL_CHECK_MASK))
@@ -1169,23 +1206,24 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 ** 'pLine' will point to the actual data line in the cache.
 	 */
 	pLine = &c->pLine[iVictim*c->iLineSize];
+	caFlsh = NULL;
 	if (iKeyVic >= 0) {
 		if (c->iType == MDL_COCACHE) {
 			/*
 			 ** Flush element since it is valid!
 			 */
-		        idVic = iKeyVic%mdl->nThreads;
+		        idVic = iKeyVic&c->iIdMask;
 		        caFlsh = (CAHEAD *)mdl->pszFlsh;
 			pszFlsh = &mdl->pszFlsh[sizeof(CAHEAD)];
 		        caFlsh->cid = cid;
 			caFlsh->mid = MDL_MID_CACHEFLSH;
 			caFlsh->id = mdl->idSelf;
-			caFlsh->iLine = iKeyVic/mdl->nThreads;
+			caFlsh->iLine = iKeyVic >> c->iInvKeyShift;
 			for(i = 0; i < c->iLineSize; ++i)
 			    pszFlsh[i] = pLine[i];
-			MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+			MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 				 MPI_BYTE, idVic,
-				 MDL_TAG_CACHECOM, MPI_COMM_WORLD); 
+				 MDL_TAG_CACHECOM, MPI_COMM_WORLD, &reqFlsh); 
 			}
 		/*
 		 ** If valid iLine then "unlink" it from the cache.
@@ -1225,6 +1263,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 */
 	while (1) {
 		if(mdlCacheReceive(mdl,pLine)) {
+		      if(caFlsh)
+			    MPI_Wait(&reqFlsh, &status);
 		      return(&pLine[iElt*c->iDataSize]);
 		      }
 		}
