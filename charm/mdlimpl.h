@@ -106,7 +106,6 @@ typedef struct cacheTag {
 	} CTAG;
 
 typedef	struct procDATA {
-	    int iProc;
 	    char *pData;
 	    int nData;
 	    } PDATA;

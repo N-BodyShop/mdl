@@ -1359,6 +1359,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	proxyCache.ckLocalBranch()->FinishCache(cid);
 	mdl->pSelf->barrier();
 	mdl->pSelf->cache[cid].iType = MDL_NOCACHE;
+	mdl->pSelf->barrier();
 	}
 
 #ifndef mdlCacheCheck
@@ -1413,8 +1414,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	    return(&(c->procData[CmiRankOf(id)].pData[iIndex*c->iDataSize]));
 	    }
 	
-	if (!(c->nAccess & MDL_CHECK_MASK))
-	        mdlCacheCheck(mdl);
+	// if (!(c->nAccess & MDL_CHECK_MASK))
+	//        mdlCacheCheck(mdl);
 	/*
 	 ** Determine memory block key value and cache line.
 	iLine = iIndex >> MDL_CACHELINE_BITS;
@@ -1426,7 +1427,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 ** Check for a match!
 	 */
 	while(CmiTryLock(*lock))
-	    mdlCacheCheck(mdl);
+	    CthYield();
 	
 	++c->nAccess;
 	i = c->pTrans[iKey & c->iTransMask];
@@ -1463,7 +1464,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 			c->pTag[i].nLast = c->nAccess;
 			CmiUnlock(*lock);
 			while(c->pTag[i].bFetching == 1)
-			    mdlCacheCheck(mdl);
+			    CthYield();
 			pLine = &c->pLine[i*c->iLineSize];
 			iElt = iIndex & MDL_CACHE_MASK;
 			return(&pLine[iElt*c->iDataSize]);
@@ -1618,7 +1619,7 @@ void mdlRelease(MDL mdl,int cid,void *p)
 	 */
 	if (iLine > 0 && iLine < c->nLines) {
 	    while(CmiTryLock(*mdl->pSelf->lock))
-		  mdlCacheCheck(mdl);
+		  CthYield();
 		--c->pTag[iLine].nLock;
 		assert(c->pTag[iLine].nLock >= 0);
 		CmiUnlock(*mdl->pSelf->lock);
