@@ -24,7 +24,7 @@
 #define MDL_DEFAULT_SERVICES	50
 #define MDL_DEFAULT_CACHEIDS	5
 
-#define MDL_TRANS_SIZE		50000 
+#define MDL_TRANS_SIZE		50000
 #define MDL_TAG_INIT 		1
 #define MDL_TAG_SWAPINIT 	2
 #define MDL_TAG_SWAP		3
@@ -313,15 +313,15 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 */ 
 	swi.nOutBytes = nOutBytes;
 	swi.nBufBytes = nBufBytes;
-	MPI_Isend(&swi,sizeof(swi),MPI_CHAR,id,MDL_TAG_SWAPINIT,
+	MPI_Isend(&swi,sizeof(swi),MPI_BYTE,id,MDL_TAG_SWAPINIT,
 		  MPI_COMM_WORLD, &request);
 	/*
 	 ** Receive the number of target thread rejects and target free space
 	 */
 	iTag = MDL_TAG_SWAPINIT;
 	pid = id;
-	MPI_Recv(&swo,sizeof(swo),MPI_CHAR,pid,iTag,MPI_COMM_WORLD, &status);
-	MPI_Get_count(&status, MPI_CHAR, &nBytes);
+	MPI_Recv(&swo,sizeof(swo),MPI_BYTE,pid,iTag,MPI_COMM_WORLD, &status);
+	MPI_Get_count(&status, MPI_BYTE, &nBytes);
 	assert(nBytes == sizeof(swo));
 	MPI_Wait(&request, &status);
 	nInBytes = swo.nOutBytes;
@@ -346,13 +346,13 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		 ** Copy to a temp buffer to be safe.
 		 */
 		for (i=0;i<nOutMax;++i) mdl->pszTrans[i] = pszOut[i];
-		MPI_Isend(mdl->pszTrans,nOutMax,MPI_CHAR,id,MDL_TAG_SWAP,
+		MPI_Isend(mdl->pszTrans,nOutMax,MPI_BYTE,id,MDL_TAG_SWAP,
 			 MPI_COMM_WORLD, &request);
 		iTag = MDL_TAG_SWAP;
 		pid = id;
-		MPI_Recv(pszIn,nInMax,MPI_CHAR,pid,iTag,MPI_COMM_WORLD,
+		MPI_Recv(pszIn,nInMax,MPI_BYTE,pid,iTag,MPI_COMM_WORLD,
 			 &status);
-		MPI_Get_count(&status, MPI_CHAR, &nBytes);
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == nInMax);
 		MPI_Wait(&request, &status);
 		/*
@@ -370,13 +370,13 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	/*
 	 ** At this stage we perform only unilateral transfers, and here we
 	 ** could exceed the opponent's storage capacity.
-	 ** Note: use of bsend is mandatory here, also because of this we
+	 ** Note: use of Ssend is mandatory here, also because of this we
 	 ** don't need to use the intermediate buffer mdl->pszTrans.
 	 */
 	while (nOutBytes && nOutBufBytes) {
 		nOutMax = (nOutBytes < MDL_TRANS_SIZE)?nOutBytes:MDL_TRANS_SIZE;
 		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
-		MPI_Send(pszOut,nOutMax,MPI_CHAR,id,MDL_TAG_SWAP,
+		MPI_Ssend(pszOut,nOutMax,MPI_BYTE,id,MDL_TAG_SWAP,
 			 MPI_COMM_WORLD);
 		pszOut = &pszOut[nOutMax];
 		nOutBytes -= nOutMax;
@@ -387,9 +387,9 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		nInMax = (nInBytes < MDL_TRANS_SIZE)?nInBytes:MDL_TRANS_SIZE;
 		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
 		iTag = MDL_TAG_SWAP;
-		MPI_Recv(pszIn,nInMax,MPI_CHAR,id,iTag,MPI_COMM_WORLD,
+		MPI_Recv(pszIn,nInMax,MPI_BYTE,id,iTag,MPI_COMM_WORLD,
 			 &status);
-		MPI_Get_count(&status, MPI_CHAR, &nBytes);
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == nInMax);
 		pszIn = &pszIn[nInMax];
 		nInBytes -= nInMax;
@@ -473,7 +473,7 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 	if (nInBytes > 0 && pszIn != NULL) {
 		for (i=0;i<nInBytes;++i) pszOut[i] = pszIn[i];
 		}
-	MPI_Send(mdl->pszBuf,nInBytes+sizeof(SRVHEAD),MPI_CHAR,id,MDL_TAG_REQ,
+	MPI_Send(mdl->pszBuf,nInBytes+sizeof(SRVHEAD),MPI_BYTE,id,MDL_TAG_REQ,
 		 MPI_COMM_WORLD);
 	}
 
@@ -487,9 +487,9 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 	MPI_Status status;
 
 	iTag = MDL_TAG_RPL;
-	MPI_Recv(mdl->pszBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),MPI_CHAR,
+	MPI_Recv(mdl->pszBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),MPI_BYTE,
 					id,iTag,MPI_COMM_WORLD, &status);
-	MPI_Get_count(&status, MPI_CHAR, &nBytes);
+	MPI_Get_count(&status, MPI_BYTE, &nBytes);
 	assert(nBytes == ph->nOutBytes + sizeof(SRVHEAD));
 	if (ph->nOutBytes > 0 && pszOut != NULL) {
 		for (i=0;i<ph->nOutBytes;++i) pszOut[i] = pszIn[i];
@@ -512,12 +512,12 @@ void mdlHandler(MDL mdl)
 		iTag = MDL_TAG_REQ;
 		id = MPI_ANY_SOURCE;
 		MPI_Recv(mdl->pszIn,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
-			       MPI_CHAR, id,iTag,MPI_COMM_WORLD,&status);
+			       MPI_BYTE, id,iTag,MPI_COMM_WORLD,&status);
 		/*
 		 ** Quite a few sanity checks follow.
 		 */
 		id = status.MPI_SOURCE;
-		MPI_Get_count(&status, MPI_CHAR, &nBytes);
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == phi->nInBytes + sizeof(SRVHEAD));
 		assert(id == phi->idFrom);
 		sid = phi->sid;
@@ -533,7 +533,7 @@ void mdlHandler(MDL mdl)
 		pho->nInBytes = phi->nInBytes;
 		pho->nOutBytes = nOutBytes;
 		MPI_Send(mdl->pszOut,nOutBytes+sizeof(SRVHEAD),
-			 MPI_CHAR, id,MDL_TAG_RPL, MPI_COMM_WORLD);
+			 MPI_BYTE, id,MDL_TAG_RPL, MPI_COMM_WORLD);
 		}
 	}
 
@@ -561,7 +561,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 
 	id = MPI_ANY_SOURCE;
 	iTag = MDL_TAG_CACHECOM;
-	MPI_Recv(mdl->pszRcv,mdl->iCaBufSize, MPI_CHAR, id,
+	MPI_Recv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, id,
 		 iTag, MPI_COMM_WORLD, &status);
 
 	c = &mdl->cache[ph->cid];
@@ -588,7 +588,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 			MPI_Wait(&mdl->pReqRpl[ph->id], &status);
 		        }
 		mdl->pmidRpl[ph->id] = 0;
-		MPI_Isend(phRpl,sizeof(CAHEAD)+c->iLineSize,MPI_CHAR,
+		MPI_Isend(phRpl,sizeof(CAHEAD)+c->iLineSize,MPI_BYTE,
 			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD,
 			  &mdl->pReqRpl[ph->id]); 
 		return(0);
@@ -815,12 +815,12 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 		 ** for these sends to complete, but will know for sure
 		 ** that they have completed.
 		 */
-		MPI_Send(&caIn,sizeof(CAHEAD),MPI_CHAR, 0,
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		MPI_Send(&caIn,sizeof(CAHEAD),MPI_CHAR, id,
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
@@ -864,12 +864,12 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		 ** for these sends to complete, but will know for sure
 		 ** that they have completed.
 		 */
-		MPI_Send(&caIn,sizeof(CAHEAD),MPI_CHAR, 0,
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		MPI_Send(&caIn,sizeof(CAHEAD),MPI_CHAR, id,
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
@@ -911,7 +911,7 @@ void mdlFinishCache(MDL mdl,int cid)
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
 				MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
-					 MPI_CHAR, id, MDL_TAG_CACHECOM,
+					 MPI_BYTE, id, MDL_TAG_CACHECOM,
 					 MPI_COMM_WORLD); 
 				mdlCacheCheck(mdl); /* service incoming */
 				}
@@ -929,12 +929,12 @@ void mdlFinishCache(MDL mdl,int cid)
 		mdlCacheReceive(mdl, NULL);
 	    }
 	else {
-	    MPI_Send(&caOut,sizeof(CAHEAD),MPI_CHAR, 0,
+	    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, 0,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 	    }
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		MPI_Send(&caOut,sizeof(CAHEAD),MPI_CHAR, id,
+		MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
 			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
@@ -1033,7 +1033,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	c->caReq.mid = MDL_MID_CACHEREQ;
 	c->caReq.id = mdl->idSelf;
 	c->caReq.iLine = iLine;
-	MPI_Send(&c->caReq,sizeof(CAHEAD),MPI_CHAR,
+	MPI_Send(&c->caReq,sizeof(CAHEAD),MPI_BYTE,
 		 id,MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 	++c->nMiss;
 	/*
@@ -1082,7 +1082,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 			for(i = 0; i < c->iLineSize; ++i)
 			    pszFlsh[i] = pLine[i];
 			MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
-				 MPI_CHAR, idVic,
+				 MPI_BYTE, idVic,
 				 MDL_TAG_CACHECOM, MPI_COMM_WORLD); 
 			}
 		/*
