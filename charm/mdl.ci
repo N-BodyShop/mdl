@@ -1,0 +1,30 @@
+mainmodule mdl {
+  readonly CProxy_AMdl aId;
+  readonly CProxy_Main MainId;
+
+  message[varsize] MdlMsg;
+  message[varsize] MdlSwapMsg;
+  message[varsize] MdlCacheMsg;
+
+  mainchare Main {
+    entry Main(CkArgMsg *m);
+    entry [threaded] void startMain(CkArgMsg *m);
+    entry void done(void);
+  };
+
+  array [1D] AMdl {
+    entry AMdl(int, char *);
+    entry [threaded] void AMdlInit(void *fcnChild);
+    entry void swapInit(int, int);
+    entry void swapSendMore();
+    entry void swapGetMore(MdlSwapMsg *);
+    entry void swapDone();
+    entry void reqReply(MdlMsg *);
+    entry void stopSrv();
+    entry void reqHandle(MdlMsg *);
+    entry void CacheReceive(MdlCacheMsg *);
+    entry void barrierEnter();
+    entry void barrierRel();
+    entry void test();
+  };
+};
