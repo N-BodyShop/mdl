@@ -388,10 +388,12 @@ void mdlAddService(MDL mdl,int sid,void *p1,
 	 */
 	if (nInBytes > mdl->nMaxInBytes) {
 		mdl->pszIn = realloc(mdl->pszIn,nInBytes);
+		assert(mdl->pszIn != NULL);
 		mdl->nMaxInBytes = nInBytes;
 		}
 	if (nOutBytes > mdl->nMaxOutBytes) {
 		mdl->pszOut = realloc(mdl->pszOut,nOutBytes);
+		assert(mdl->pszOut != NULL);
 		mdl->nMaxOutBytes = nOutBytes;
 		}
 	mdl->psrv[sid].p1 = p1;
