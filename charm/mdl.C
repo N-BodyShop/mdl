@@ -1407,6 +1407,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	char ach[80];
 	char *pszFlsh;
 	CmiNodeLock *lock = mdl->pSelf->lock;
+	int bLocalFetch;	// Can we get the line locally?
+	char* pLocalAddress;	// Address of line if so
 
 	if((c->iType == MDL_ROCACHE && CkNodeOf(id) == mdl->iNodeSelf)
 	   || id == mdl->idSelf) {
@@ -1430,66 +1432,64 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	    CthYield();
 	
 	++c->nAccess;
-	i = c->pTrans[iKey & c->iTransMask];
-	if (c->pTag[i].iKey == iKey) {
-	    // Also match on processor for CO cache
-	    if(c->iType == MDL_ROCACHE
-	       || c->pTag[i].nLock == 0
-	       || c->pTag[i].iIdLock == mdl->idSelf) {
-		++c->pTag[i].nLock;
-		c->pTag[i].iIdLock = mdl->idSelf;
-		c->pTag[i].nLast = c->nAccess;
-		CmiUnlock(*lock);
-		while(c->pTag[i].bFetching == 1)
-		    CthYield();
-		pLine = &c->pLine[i*c->iLineSize];
-		iElt = iIndex & MDL_CACHE_MASK;
-		return(&pLine[iElt*c->iDataSize]);
-		}
-	    }
 
-	i = c->pTag[i].iLink;
+	bLocalFetch = 0;
 	/*
 	 ** Collision chain search.
 	 */
-	while (i) {
-		++c->nColl;
+	for(i = c->pTrans[iKey & c->iTransMask]; i; i = c->pTag[i].iLink) {
+	    if (c->pTag[i].iKey == iKey) {
 		// Also match on processor for CO cache
-		if (c->pTag[i].iKey == iKey
-		    && (c->iType == MDL_ROCACHE
-			|| c->pTag[i].nLock == 0
-			|| c->pTag[i].iIdLock == mdl->idSelf)) {
-			++c->pTag[i].nLock;
-			c->pTag[i].iIdLock = mdl->idSelf;
-			c->pTag[i].nLast = c->nAccess;
-			CmiUnlock(*lock);
-			while(c->pTag[i].bFetching == 1)
-			    CthYield();
-			pLine = &c->pLine[i*c->iLineSize];
-			iElt = iIndex & MDL_CACHE_MASK;
-			return(&pLine[iElt*c->iDataSize]);
-			}
-		i = c->pTag[i].iLink;
+		if(c->iType == MDL_ROCACHE
+		   || c->pTag[i].nLock == 0
+		   || c->pTag[i].iIdLock == mdl->idSelf) {
+		    ++c->pTag[i].nLock;
+		    c->pTag[i].iIdLock = mdl->idSelf;
+		    c->pTag[i].nLast = c->nAccess;
+		    CmiUnlock(*lock);
+		    while(c->pTag[i].bFetching == 1)
+			CthYield();
+		    pLine = &c->pLine[i*c->iLineSize];
+		    iElt = iIndex & MDL_CACHE_MASK;
+		    return(&pLine[iElt*c->iDataSize]);
+		    }
+		// matched but another processor has it locked
+		bLocalFetch = 1;
+		pLocalAddress = &c->pLine[i*c->iLineSize];
 		}
+	    }
+
 	/*
 	 ** Cache Miss.
 	 */
 	iLine = iIndex >> MDL_CACHELINE_BITS;
-	int nRequestBytes = 0;	// Just a place holder
-
-	MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
-	mesg->ch.cid = cid;
-	mesg->ch.rid = id;
-	mesg->ch.id = mdl->idSelf;
-	mesg->ch.iLine = iLine;
-
+	//
+	// Check if it is locally available
+	//
+	if(c->iType == MDL_COCACHE && CkNodeOf(id) == mdl->iNodeSelf) {
+	    bLocalFetch = 1;
+	    pLocalAddress = 
+		&(c->procData[CmiRankOf(id)].pData[iLine*c->iLineSize]);
+	    }
+	    
 	CProxy_grpCache proxyCache(CacheId);
 
-	// CkArrayIndex1D aidxId(id);
+        if(!bLocalFetch) {
+	    
+	    int nRequestBytes = 0;	// Just a place holder
+
+	    MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
+	    mesg->ch.cid = cid;
+	    mesg->ch.rid = id;
+	    mesg->ch.id = mdl->idSelf;
+	    mesg->ch.iLine = iLine;
+
+	    // CkArrayIndex1D aidxId(id);
+
+	    proxyCache[CkNodeOf(id)].CacheRequest(mesg);
+	    ++c->nMiss;
+	    }
 	
-	proxyCache[CkNodeOf(id)].CacheRequest(mesg);
-	
-	++c->nMiss;
 	/*
 	 **	LRU Victim Search!
 	 ** If nAccess > BILLION then we reset all LRU counters.
@@ -1582,14 +1582,25 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	// The "bFetching" bit in the RO Cache also lets me unlock here.
 	CmiUnlock(*lock);
 
-	mesg = proxyCache.ckLocalBranch()->waitCache(mdl->idSelf);
-	assert(mesg->ch.id == id);
-	assert(mesg->ch.cid == cid);
-	
-	char *pszLine = mesg->pszBuf;
+	char *pszLine;
+	MdlCacheMsg *mesg;
+	if(!bLocalFetch) {
+	    mesg = proxyCache.ckLocalBranch()->waitCache(mdl->idSelf);
+	    assert(mesg->ch.id == id);
+	    assert(mesg->ch.cid == cid);
+
+	    pszLine = mesg->pszBuf;
+	    }
+	else {
+	    pszLine = pLocalAddress;
+	    }
+	   
+	   
 	for(i = 0; i < c->iLineSize; i++)
 	    pLine[i] = pszLine[i];
-	delete mesg;
+
+	if(!bLocalFetch)
+	    delete mesg;
 	
 	if (c->iType == MDL_COCACHE && c->init) {
 	    /*
