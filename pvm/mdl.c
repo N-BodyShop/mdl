@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#ifdef sgi
+#include <strings.h> /* for rindex() */
+#endif
 #include <malloc.h>
 #include <math.h>
 #include <limits.h>
@@ -50,7 +53,7 @@ double mdlCpuTimer(MDL mdl)
 int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 {
 	MDL mdl;
-	int tidSelf;
+	int tidSelf=-1;
 	int i,nThreads,nArch,bid,bDiag,bThreads,iLen;
 	struct pvmhostinfo *hostp;
 	char *p,ach[256],achDiag[256],name[256];
@@ -201,7 +204,10 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 		mdl->idSelf = 0;
 		mdl->atid[mdl->idSelf] = 0;
 		if (mdl->bDiag) {
-			sprintf(achDiag,"%s.%d",ach,mdl->idSelf);
+			char *tmp = strrchr(argv[0],'/');
+			if (!tmp) tmp = argv[0];
+			else ++tmp;
+			sprintf(achDiag,"%s/%s.%d",ach,tmp,mdl->idSelf);
 			mdl->fpDiag = fopen(achDiag,"w");
 			assert(mdl->fpDiag != NULL);
 			}
@@ -766,7 +772,9 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_COCACHE;
+	assert(init);
 	c->init = init;
+	assert(combine);
 	c->combine = combine;
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!

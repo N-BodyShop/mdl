@@ -209,7 +209,7 @@ void BasicDestroy(MDL mdl)
 int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 {
     MDL mdl,tmdl;
-    int i,nThreads,bThreads,bDiag;
+    int i,nThreads=1,bThreads,bDiag;
     char *p,ach[256],achDiag[256];
     pthread_attr_t attr;
 #ifdef TINY_PTHREAD_STACK
@@ -294,7 +294,10 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 			tmdl->bDiag = bDiag;
 			tmdl->nThreads = nThreads;
 			if (tmdl->bDiag) {
-				sprintf(achDiag,"%s.%d",ach,tmdl->idSelf);
+				char *tmp = strrchr(argv[0],'/');
+				if (!tmp) tmp = argv[0];
+				else ++tmp;
+				sprintf(achDiag,"%s/%s.%d",ach,tmp,tmdl->idSelf);
 				tmdl->fpDiag = fopen(achDiag,"w");
 				assert(tmdl->fpDiag != NULL);
 				}
@@ -315,7 +318,10 @@ int mdlInitialize(MDL *pmdl,char **argv,void *(*fcnChild)(void *))
 		mdl->nThreads = 1;
 		mdl->idSelf = 0;
 		if (mdl->bDiag) {
-			sprintf(achDiag,"%s.%d",ach,mdl->idSelf);
+			char *tmp = strrchr(argv[0],'/');
+			if (!tmp) tmp = argv[0];
+			else ++tmp;
+			sprintf(achDiag,"%s/%s.%d",ach,tmp,mdl->idSelf);
 			mdl->fpDiag = fopen(achDiag,"w");
 			assert(mdl->fpDiag != NULL);
 			}

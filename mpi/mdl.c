@@ -931,7 +931,9 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_COCACHE;
+	assert(init);
 	c->init = init;
+	assert(combine);
 	c->combine = combine;
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!

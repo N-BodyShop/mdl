@@ -124,15 +124,18 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	mdl->bDiag = bDiag;
 	mdl->nThreads = nThreads;
 	*pmdl = mdl;
-		/*
-		 ** A unik!
-		 */
-		mdl->idSelf = 0;
-		if (mdl->bDiag) {
-			sprintf(achDiag,"%s.%d",ach,mdl->idSelf);
-			mdl->fpDiag = fopen(achDiag,"w");
-			assert(mdl->fpDiag != NULL);
-			}
+	/*
+	 ** A unik!
+	 */
+	mdl->idSelf = 0;
+	if (mdl->bDiag) {
+		char *tmp = strrchr(argv[0],'/');
+		if (!tmp) tmp = argv[0];
+		else ++tmp;
+		sprintf(achDiag,"%s/%s.%d",ach,tmp,mdl->idSelf);
+		mdl->fpDiag = fopen(achDiag,"w");
+		assert(mdl->fpDiag != NULL);
+		}
 	return(nThreads);
 	}
 
