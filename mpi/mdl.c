@@ -185,40 +185,21 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	assert(mdl->pszFlsh != NULL);
 	mdl->bDiag = bDiag;
 	*pmdl = mdl;
-	if (mdl->nThreads > 1) {
-		if (mdl->idSelf == 0) {
-			/*
-			 ** Master thread.
-			 */
-			if (mdl->bDiag) {
-				sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
-				mdl->fpDiag = fopen(achDiag,"w");
-				assert(mdl->fpDiag != NULL);
-				}
-			}
-		else {
-			/*
-			 ** Child thread.
-			 */
-			if (mdl->bDiag) {
-				sprintf(achDiag,"%s/%s.%d",ach,argv[0],mdl->idSelf);
-				mdl->fpDiag = fopen(achDiag,"w");
-				assert(mdl->fpDiag != NULL);
-				}
-			(*fcnChild)(mdl);
-			mdlFinish(mdl);
-			exit(0);
-			}
+	if (mdl->bDiag) {
+		char *tmp = strrchr(argv[0],'/');
+		if (!tmp) tmp = argv[0];
+		else ++tmp;
+		sprintf(achDiag,"%s/%s.%d",ach,tmp,mdl->idSelf);
+		mdl->fpDiag = fopen(achDiag,"w");
+		assert(mdl->fpDiag != NULL);
 		}
-	else {
+	if (mdl->nThreads > 1 && mdl->idSelf) {
 		/*
-		 ** A unik!
+		 ** Child thread.
 		 */
-		if (mdl->bDiag) {
-			sprintf(achDiag,"%s.%d",ach,mdl->idSelf);
-			mdl->fpDiag = fopen(achDiag,"w");
-			assert(mdl->fpDiag != NULL);
-			}
+		(*fcnChild)(mdl);
+		mdlFinish(mdl);
+		exit(0);
 		}
 	return(mdl->nThreads);
 	}
@@ -560,9 +541,13 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	int n,i;
 	MPI_Status status;
 	int ret;
+	int iLineSize;
+#if 0
 	char achDiag[256];
+#endif
 
-	MPI_Wait(&mdl->ReqRcv, &status);
+	ret = MPI_Wait(&mdl->ReqRcv, &status);
+	assert(ret == MPI_SUCCESS);
 #if 0
 	sprintf(achDiag, "%d: cache %d, message %d, from %d, rec top\n",
 		mdl->idSelf, ph->cid, ph->mid, ph->id);
@@ -593,12 +578,16 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		phRpl->mid = MDL_MID_CACHERPL;
 		phRpl->id = mdl->idSelf;
 		t = &c->pData[ph->iLine*c->iLineSize];
-		for (i=0;i<c->iLineSize;++i) pszRpl[i] = t[i];
+		if(t+c->iLineSize > c->pData + c->nData*c->iDataSize)
+			iLineSize = c->pData + c->nData*c->iDataSize - t;
+		else
+			iLineSize = c->iLineSize;
+		for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
 		if(mdl->pmidRpl[ph->id] != -1) {
 			MPI_Wait(&mdl->pReqRpl[ph->id], &status);
 		        }
 		mdl->pmidRpl[ph->id] = 0;
-		MPI_Isend(phRpl,sizeof(CAHEAD)+c->iLineSize,MPI_BYTE,
+		MPI_Isend(phRpl,sizeof(CAHEAD)+iLineSize,MPI_BYTE,
 			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD,
 			  &mdl->pReqRpl[ph->id]); 
 		ret = 0;
