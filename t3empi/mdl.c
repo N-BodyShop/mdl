@@ -1232,7 +1232,7 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 	shmem_get((long *)pLine,(long *)(c->pData + iLine*c->iLineSize),
 			  iLineSize_64,id);
 
-	if (c->iType == MDL_COCACHE) {
+	if (c->iType == MDL_COCACHE && c->init) {
 		/*
 		 ** Call the initializer function for all elements in 
 		 ** the cache line.
