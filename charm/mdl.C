@@ -291,7 +291,7 @@ Main::Main(CkArgMsg* m)
 
       CProxy_treeMap procMap = CProxy_treeMap::ckNew();
       CkArrayOptions opts(CkNumPes());
-      opts.setMap(procMap);
+      //      opts.setMap(procMap);
       aId = CProxy_AMdl::ckNew(bDiag, std::string(tmp), opts);
       CacheId = CProxy_grpCache::ckNew();
       
@@ -876,6 +876,7 @@ grpCache::CacheRequest(MdlCacheMsg *mesg)
 	char *t;
 	int i;
 	int iLineSize;
+        // CProxy_AMdl proxyAMdl(aId);
 	CProxy_grpCache proxyCache(CacheId);
 	char *pData;
 	int nData;
@@ -899,7 +900,11 @@ grpCache::CacheRequest(MdlCacheMsg *mesg)
 	mesgRpl->ch.id = mesg->ch.rid;
 	mesgRpl->ch.rid = mesg->ch.id;
 	for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
-	proxyCache[CmiNodeOf(mesg->ch.id)].CacheReply(mesgRpl);
+
+	// CkArrayIndex1D aidxId(mesg->ch.id);
+
+	// proxyCache[CkNodeOf(proxyAMdl.ckLocMgr()->homePe(aidxId))].CacheReply(mesgRpl);
+	proxyCache[CkNodeOf(mesg->ch.id)].CacheReply(mesgRpl);
 	delete mesg;
     }
 
@@ -1356,13 +1361,16 @@ void mdlFinishCache(MDL mdl,int cid)
 	mdl->pSelf->cache[cid].iType = MDL_NOCACHE;
 	}
 
+#ifndef mdlCacheCheck
+
 extern "C"
 void mdlCacheCheck(MDL mdl)
 {
-    int dummy = CmiDeliverMsgs(0);
+    // int dummy = CmiDeliverMsgs(0);
     // CthYield();
     
     }
+#endif
 
 MdlCacheMsg *
 grpCache::waitCache(int id) 
@@ -1432,7 +1440,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		c->pTag[i].nLast = c->nAccess;
 		CmiUnlock(*lock);
 		while(c->pTag[i].bFetching == 1)
-		    mdlCacheCheck(mdl);
+		    CthYield();
 		pLine = &c->pLine[i*c->iLineSize];
 		iElt = iIndex & MDL_CACHE_MASK;
 		return(&pLine[iElt*c->iDataSize]);
@@ -1476,7 +1484,9 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 
 	CProxy_grpCache proxyCache(CacheId);
 
-	proxyCache[CmiNodeOf(id)].CacheRequest(mesg);
+	// CkArrayIndex1D aidxId(id);
+	
+	proxyCache[CkNodeOf(id)].CacheRequest(mesg);
 	
 	++c->nMiss;
 	/*

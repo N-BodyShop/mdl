@@ -116,7 +116,9 @@ void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
 void mdlFinishCache(MDL,int);
-void mdlCacheCheck(MDL);
+
+#define mdlCacheCheck(MDL) 
+
 void *mdlAquire(MDL,int,int,int);
 void mdlRelease(MDL,int,void *);
 /*
