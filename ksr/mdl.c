@@ -605,6 +605,28 @@ void AdjustDataSize(MDL mdl)
 
 
 /*
+ ** Special MDL memory allocation functions for allocating memory 
+ ** which must be visible to other processors thru the MDL cache 
+ ** functions.
+ ** mdlMalloc() is defined to return a pointer to AT LEAST iSize bytes 
+ ** of memory. This pointer will be passed to either mdlROcache or 
+ ** mdlCOcache as the pData parameter.
+ ** For PVM and most machines these functions are trivial, but on the 
+ ** T3D and perhaps some future machines these functions are required.
+ */
+void *mdlMalloc(MDL mdl,int iSize)
+{	
+	return(malloc(iSize));
+	}
+
+
+void mdlFree(MDL mdl,void *p)
+{
+	free(p);
+	}
+
+
+/*
  ** Initialize a caching space.
  */
 void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
@@ -921,7 +943,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	}
     /*
      ** Cache Failure!
-     */
+     */y
     sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
     mdlDiag(mdl,ach);
     exit(1);
@@ -944,6 +966,30 @@ void mdlRelease(MDL mdl,int cid,void *p)
 	}
     else assert(0);
     }
+
+
+double mdlNumAccess(MDL mdl,int cid)
+{
+	return(0.0);
+	}
+
+
+double mdlMissRatio(MDL mdl,int cid)
+{
+	return(0.0);
+	}
+
+
+double mdlCollRatio(MDL mdl,int cid)
+{
+	return(0.0);
+	}
+
+
+double mdlMinRatio(MDL mdl,int cid)
+{
+	return(0.0);
+	}
 
 
 

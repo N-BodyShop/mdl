@@ -106,12 +106,21 @@ void mdlHandler(MDL);
 /*
  ** Caching functions.
  */
+void *mdlMalloc(MDL,int);
+void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
 void mdlFinishCache(MDL,int);
 void *mdlAquire(MDL,int,int,int);
 void mdlRelease(MDL,int,void *);
+/*
+ ** Cache statistics functions.
+ */
+double mdlNumAccess(MDL,int);
+double mdlMissRatio(MDL,int);
+double mdlCollRatio(MDL,int);
+double mdlMinRatio(MDL,int);
 
 #endif
 
