@@ -22,10 +22,16 @@ XDIR	=	$(BDIR)/$(PVM_ARCH)
 CFLAGS	=	-32 -O2 -I$(PVMDIR)/include
 LIBS	=	$(PVMLIB) $(ARCHLIB) -lm
 
-default:	mdl.o
+default:	mdl.o mdl-lru.o mdl-plr.o
 
 mdl.o: $(SDIR)/mdl.c $(SDIR)/mdl.h
 	$(CC) $(CFLAGS) -c $(SDIR)/mdl.c
+
+mdl-lru.o: $(SDIR)/mdl-lru.c $(SDIR)/mdl-lru.h
+	$(CC) $(CFLAGS) -c $(SDIR)/mdl-lru.c
+
+mdl-plr.o: $(SDIR)/mdl-plr.c $(SDIR)/mdl-plr.h
+	$(CC) $(CFLAGS) -c $(SDIR)/mdl-plr.c
 
 
 
