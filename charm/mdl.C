@@ -1083,7 +1083,7 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 	c->iLine = 1;
 	c->nTrans = 1;
 	while(c->nTrans < c->nLines) c->nTrans *= 2;
-	c->nTrans *= 2;
+	c->nTrans *= 4;
 	c->iTransMask = c->nTrans-1;
 	/*
 	 **	Set up the translation table.
@@ -1352,7 +1352,7 @@ extern "C"
 void mdlCacheCheck(MDL mdl)
 {
     //    int dummy = CmiDeliverMsgs(0);
-    // CthYield();
+    CthYield();
     
     }
 #endif
@@ -1446,7 +1446,9 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	    int nRequestBytes = 0;	// Just a place holder
 
 	    peId = proxyAMdl.ckLocalBranch()->lastKnown(CkArrayIndex1D(id));
-	    MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
+	    MdlCacheMsg *mesg = new(&nRequestBytes, sizeof(int)) MdlCacheMsg;
+	    *((int *)CkPriorityPtr(mesg)) = - INT_MAX;
+	    CkSetQueueing(mesg, CK_QUEUEING_IFIFO);
 	    mesg->ch.cid = cid;
 	    mesg->ch.rid = id;
 	    mesg->ch.id = mdl->idSelf;
