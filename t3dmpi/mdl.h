@@ -6,7 +6,7 @@
 
 #define SRV_STOP		0
 
-#define MDL_CACHE_SIZE		100000
+#define MDL_CACHE_SIZE		1000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
@@ -19,6 +19,17 @@ typedef struct cacheTag {
 	int nLast;
 	int iLink;
 	} CTAG;
+
+/*
+ ** This structure should be "maximally" aligned, with 4 ints it
+ ** should align up to at least QUAD word, which should be enough.
+ */
+typedef struct cacheHeader {
+	int cid;
+	int mid;
+	int id;
+	int iLine;
+	} CAHEAD;
 
 typedef struct cacheSpace {
 	int iType;
@@ -33,6 +44,8 @@ typedef struct cacheSpace {
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
+	int nCheckIn;
+	int nCheckOut;
         long pDataMax;
 	void (*init)(void *);
 	void (*combine)(void *,void *);
@@ -79,6 +92,9 @@ typedef struct mdlContext {
 	 */
 	unsigned long uRand;
 	int iMaxDataSize;
+	int iCaBufSize;
+	char *pszRcv;
+	char *pszFlsh;
 	int nMaxCacheIds;
 	CACHE *cache;
 	} * MDL;
