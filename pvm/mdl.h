@@ -5,10 +5,16 @@
 
 #define SRV_STOP		0
 
+#define MDL_CACHE_SIZE		500000
+#define MDL_CACHELINE_BITS	3
+#define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
+#define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
+
 typedef struct cacheTag {
+	int iKey;
 	int id;
-	int iLine;
 	int nLock;
+	int nLast;
 	int iLink;
 	} CTAG;
 
@@ -18,7 +24,6 @@ typedef struct cacheSpace {
 	char *pData;
 	int iDataSize;
 	int nData;
-	int nLineElts;
 	int iLineSize;
 	int nLines;
 	int nTrans;
@@ -31,11 +36,20 @@ typedef struct cacheSpace {
 	int chko[4];
 	int chki[4];
 	int flsh[4];
-	int nAccess;
 	int nCheckIn;
 	int nCheckOut;
 	void (*init)(void *);
 	void (*combine)(void *,void *);
+	/*	
+	 ** Statistics stuff.
+	 */
+	int nAccess;
+	int nAccHigh;
+	long nMiss;
+	long nColl;
+	long nMin;
+	int nKeyMax;
+	char *pbKey;
 	} CACHE;
 
 
@@ -87,12 +101,22 @@ void mdlHandler(MDL);
 /*
  ** Caching functions.
  */
+void *mdlMalloc(MDL,int);
+void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
 void mdlFinishCache(MDL,int);
+void mdlCacheCheck(MDL);
 void *mdlAquire(MDL,int,int,int);
 void mdlRelease(MDL,int,void *);
+/*
+ ** Cache statistics functions.
+ */
+double mdlNumAccess(MDL,int);
+double mdlMissRatio(MDL,int);
+double mdlCollRatio(MDL,int);
+double mdlMinRatio(MDL,int);
 
 #endif
 
