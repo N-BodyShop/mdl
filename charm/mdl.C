@@ -197,6 +197,56 @@ void mdlSetup(MDL *pmdl, int bDiag, const char* progname)
 	    }
     }
 
+/*
+ * Count in bit-reversed order
+ */
+static
+int revadd(int i, int nbits) {
+        int result;
+        int ibit;
+
+        result = i;
+        for(ibit = nbits - 1; ibit >= 0; ibit--) {
+             result = result ^ (1 << ibit);
+             if(result & (1 << ibit))
+                break;
+        }
+        return result;
+}
+
+class treeMap : public CkArrayMap
+{
+private:
+    int *pmap;
+public:
+    treeMap(void) 
+    {
+	int ilog2; int rev;
+	int i;
+	int nThreads = CkNumPes();
+	    
+	// find number of bits needed
+	for(i = nThreads-1, ilog2 = 0; i > 0; i >>= 1)
+		ilog2++;
+           
+	pmap = new int[nThreads];
+	
+	rev = 0;
+	for (i=0; i < nThreads; ++i) {
+	    pmap[i] = rev;
+	    while((rev = revadd(rev, ilog2)) >= nThreads);
+	    }
+    }
+    ~treeMap() { delete[] pmap; }
+    
+    int procNum(int , const CkArrayIndex &element) 
+    {
+	int myPe = *(element.data());
+	    
+	return pmap[myPe];
+    }
+};
+
 Main::Main(CkArgMsg* m)
 {
       char **argv = m->argv;
@@ -238,7 +288,11 @@ Main::Main(CkArgMsg* m)
 	
       nfinished = 0;
       MainId = thishandle;
-      aId = CProxy_AMdl::ckNew(bDiag, std::string(tmp), CkNumPes());
+
+      CProxy_treeMap procMap = CProxy_treeMap::ckNew();
+      CkArrayOptions opts(CkNumPes());
+      opts.setMap(procMap);
+      aId = CProxy_AMdl::ckNew(bDiag, std::string(tmp), opts);
       CacheId = CProxy_grpCache::ckNew();
       
       //aId = CProxy_AMdl::ckNew(bDiag, tmp, opts);
@@ -279,7 +333,7 @@ AMdl::AMdl(int bDiag, const std::string& progname)
     
 	mdlSetup(&mdl, bDiag, progname.c_str());
 	mdl->nThreads = CkNumPes();
-	mdl->idSelf = CkMyPe();
+	mdl->idSelf = thisIndex;
 	mdl->iNodeSelf = CkMyNode();
 	mdl->pSelf = this;
 	
@@ -1389,7 +1443,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 			|| c->pTag[i].nLock == 0
 			|| c->pTag[i].iIdLock == mdl->idSelf)) {
 			++c->pTag[i].nLock;
-			c->pTag[i].iIdLock = CkMyPe();
+			c->pTag[i].iIdLock = mdl->idSelf;
 			c->pTag[i].nLast = c->nAccess;
 			CmiUnlock(*lock);
 			while(c->pTag[i].bFetching == 1)
@@ -1471,7 +1525,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		}
 	c->pTag[iVictim].iKey = iKey;
 	c->pTag[iVictim].nLock = 1;
-	c->pTag[iVictim].iIdLock = CkMyPe();
+	c->pTag[iVictim].iIdLock = mdl->idSelf;
 	c->pTag[iVictim].nLast = c->nAccess;
 	c->pTag[iVictim].bFetching = 1;
 	/*
@@ -1567,7 +1621,7 @@ double mdlNumAccess(MDL mdl,int cid)
 {
 	CACHE *c = &(mdl->pSelf->cache[cid]);
 
-	return(c->nAccHigh*1e9 + c->nAccess);
+	return((c->nAccHigh*1e9 + c->nAccess)/CkNodeSize(CkMyNode()));
 	}
 
 

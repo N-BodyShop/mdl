@@ -20,6 +20,10 @@ mainmodule mdl {
     entry void flushreply();
   };
 
+  group treeMap {
+	entry treeMap();
+  };
+
   array [1D] AMdl {
     entry AMdl(int bDiag, const std::string& progname);
     entry void AMdlInit(void *fcnChild);
