@@ -279,21 +279,24 @@ Main::done(void)
 
 AMdl::AMdl(int bDiag, char *progname)
 {
+    int i;
+    
 	mdlSetup(&mdl, bDiag, progname);
 
-	msgReply = NULL;
+	msgReply = (MdlMsg **) malloc(mdl->nThreads*sizeof(MdlMsg *));
+	for(i = 0; i < mdl->nThreads; i++)
+	    msgReply[i] = NULL;
 	threadGetReply = 0;
 	msgCache = NULL;
 	threadCache = 0;
 	threadBarrier = 0;
 	nInBar = 0;
+	swapData.id = -1;
     }
 
 void
 AMdl::AMdlInit(void *fcnPtr)
     {
-	
-	CkPrintf("%d: in init \n", thisIndex);
 	
 	void (*fcnChild)(MDL) = (void (*)(MDL)) fcnPtr;
 	
@@ -456,6 +459,7 @@ int mdlSwap(MDL mdl,int id,
 	char *pszBuf = (char *) vBuf;
 	
 	CProxy_AMdl proxyAmdl(aId);
+	proxyAmdl[mdl->idSelf].ckLocal()->threadSwap = CthSelf();
 
 	mmdl = proxyAmdl[mdl->idSelf].ckLocal();
 	mmdl->swapData.nOutBytes = nOutBytes;
@@ -467,7 +471,7 @@ int mdlSwap(MDL mdl,int id,
 	mmdl->swapData.pszOut = &pszBuf[nBufBytes - nOutBytes];
 	mmdl->swapData.done = 0;
 	
-	proxyAmdl[mdl->idSelf].ckLocal()->threadSwap = CthSelf();
+	assert(nBufBytes >= nOutBytes);
 	proxyAmdl[id].swapInit(nOutBytes, nBufBytes);
 	proxyAmdl[mdl->idSelf].ckLocal()->waitSwapDone();
 
@@ -482,10 +486,12 @@ int mdlSwap(MDL mdl,int id,
 void
 AMdl::swapInit(int nInBytes, int nBufBytes)
 {
-    CkPrintf("%d: in swapInit()\n", thisIndex);
     swapData.nInBytes = nInBytes;
     swapData.nOutBufBytes = nBufBytes;
-    barrier();
+    
+    while(swapData.id == -1)
+	CthYield();
+    
     swapSendMore();
     }
 
@@ -496,12 +502,14 @@ AMdl::swapSendMore()
     
     CProxy_AMdl proxyAmdl(aId);
 
-    if(swapData.nOutBytes) {
+    if(swapData.nOutBytes && swapData.nOutBufBytes) {
 	int nOutMax = (swapData.nOutBytes < MDL_TRANS_SIZE)
 	    ? swapData.nOutBytes : MDL_TRANS_SIZE;
 	nOutMax = (nOutMax < swapData.nOutBufBytes)
 	    ? nOutMax : swapData.nOutBufBytes;
 
+	assert(nOutMax > 0);
+	
 	MdlSwapMsg *mesg = new(&nOutMax, 0) MdlSwapMsg;
 	mesg->nBytes = nOutMax;
 	for (i=0;i<nOutMax;++i) mesg->pszBuf[i] = swapData.pszOut[i];
@@ -527,7 +535,7 @@ AMdl::swapGetMore(MdlSwapMsg *mesg)
     int nBytes = mesg->nBytes;	// temporary for bytes transferred
     
     while(swapData.pszIn + nBytes > swapData.pszOut)
-	CthYield();
+	CthYield();		// pause while buffer is transferred out
 
     for(i = 0; i < nBytes; i++)
 	swapData.pszIn[i] = mesg->pszBuf[i];
@@ -545,9 +553,7 @@ void
 AMdl::swapDone()
 {
     swapData.done++;
-    CkPrintf("%d: in SwapDone(), %d\n", thisIndex, swapData.done);
     if(swapData.done == 2) {
-	CkPrintf("%d: continue %x SwapDone()\n", thisIndex, threadSwap);
 	CthAwaken(threadSwap);
 	}
     
@@ -557,6 +563,7 @@ void
 AMdl::waitSwapDone()
 {
 	CthSuspend();
+	swapData.id = -1;
     }
 
 extern "C"
@@ -620,8 +627,8 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 	int i;
 	
 	mesg = new(&nInBytes, sizeof(int)) MdlMsg;
-	*((int *)CkPriorityPtr(mesg)) = MAXINT;
-	CkSetQueueing(mesg, CK_QUEUEING_IFIFO);
+	// *((int *)CkPriorityPtr(mesg)) = MAXINT;
+	// CkSetQueueing(mesg, CK_QUEUEING_IFIFO);
 	
 	mesg->ph.idFrom = mdl->idSelf;
 	mesg->ph.sid = sid;
@@ -632,7 +639,7 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 		}
 	CProxy_AMdl aProxy(aId);
 	
-	assert(aProxy[mdl->idSelf].ckLocal()->msgReply == NULL);
+	assert(aProxy[mdl->idSelf].ckLocal()->msgReply[mdl->idSelf] == NULL);
 	
 	aProxy[id].reqHandle(mesg);
 	}
@@ -645,7 +652,7 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 	MdlMsg *mesg;
 
 	CProxy_AMdl proxyAMdl(aId);
-	mesg = proxyAMdl[mdl->idSelf].ckLocal()->waitReply();
+	mesg = proxyAMdl[mdl->idSelf].ckLocal()->waitReply(id);
 
 	nOutBytes = mesg->ph.nOutBytes;
 	
@@ -657,34 +664,35 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 	}
 
 MdlMsg *
-AMdl::waitReply() 
+AMdl::waitReply(int id) 
 {
     MdlMsg * msgTmp;
     
-    if(msgReply) {
-	msgTmp = msgReply;
-	msgReply = NULL;
+    if(msgReply[id]) {
+	msgTmp = msgReply[id];
+	msgReply[id] = NULL;
 	return msgTmp;
 	}
     else {
 	threadGetReply = CthSelf();
+	idReplyWait = id;
 	CthSuspend();
 	}
-    assert(msgReply);
+    assert(msgReply[id]);
     threadGetReply = 0;
-    msgTmp = msgReply;
-    msgReply = NULL;
+    msgTmp = msgReply[id];
+    msgReply[id] = NULL;
     return msgTmp;
     }
 
 void
 AMdl::reqReply(MdlMsg *mesg) 
 {
-    assert(msgReply == NULL);
+    assert(msgReply[mesg->ph.idFrom] == NULL);
     
-    msgReply = mesg;
+    msgReply[mesg->ph.idFrom] = mesg;
     
-    if(threadGetReply)
+    if(threadGetReply && mesg->ph.idFrom == idReplyWait)
 	CthAwaken(threadGetReply);
 }
 
@@ -726,6 +734,9 @@ AMdl::reqHandle(MdlMsg * mesg)
 	sid = mesg->ph.sid;
 	nInBytes = mesg->ph.nInBytes;
 	mdlassert(mdl, sid < mdl->nMaxServices);
+	while(mdl->psrv[sid].fcnService == NULL)
+	    CthYield();		// Wait for service to be registered
+	
 	mdlassert(mdl, nInBytes <= mdl->psrv[sid].nInBytes);
 	nOutBytes = 0;
 	assert(mdl->psrv[sid].fcnService != NULL);

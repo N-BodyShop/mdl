@@ -25,6 +25,5 @@ mainmodule mdl {
     entry void CacheReceive(MdlCacheMsg *);
     entry void barrierEnter();
     entry void barrierRel();
-    entry void test();
   };
 };

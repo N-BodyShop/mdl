@@ -92,14 +92,13 @@ public:
     CthThreadStruct * threadSrvWait;
     CthThreadStruct * threadCache;
     CthThreadStruct * threadBarrier;
-    MdlMsg * msgReply;
+    MdlMsg ** msgReply;
+    int idReplyWait;
     MdlCacheMsg *msgCache;
     int nInBar;
     
     MDL mdl;
     AMdl(int bDiag, char *progname);
-    AMdl() {CkPrintf("test array %d created\n",thisIndex);
-	};
 
     void AMdlInit(void *fcnPtr);
     AMdl(CkMigrateMessage*) {}
@@ -108,7 +107,7 @@ public:
     void swapGetMore(MdlSwapMsg *);
     void swapDone();
     void waitSwapDone();
-    MdlMsg *waitReply();
+    MdlMsg *waitReply(int id);
     void waitSrvStop();
     void stopSrv();
     void reqReply(MdlMsg * mesg);
@@ -118,11 +117,6 @@ public:
     void barrier();
     void barrierEnter();
     void barrierRel();
-    void test() 
-	{
-	    CkPrintf("%d: test call\n", thisIndex);
-	    }
-    
 };
 
 #endif
