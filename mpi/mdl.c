@@ -1051,8 +1051,27 @@ void mdlFinishCache(MDL mdl,int cid)
 	int last;
 	MPI_Status status;
 	MPI_Request reqFlsh;
+	MPI_Request reqBoth[2];
+	int index;
 
 	if (c->iType == MDL_COCACHE) {
+		/*
+		 * Extra checkout to let everybody finish before
+		 * flushes start.
+		 */
+		caOut.cid = cid;
+		caOut.mid = MDL_MID_CACHEOUT;
+		caOut.id = mdl->idSelf;
+		for(id = 0; id < mdl->nThreads; id++) {
+		    if(id == mdl->idSelf)
+			continue;
+		    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
+			     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		    }
+		++c->nCheckOut;
+		while(c->nCheckOut < mdl->nThreads)
+		    mdlCacheReceive(mdl, NULL);
+		c->nCheckOut = 0;
 		/*
 		 ** Must flush all valid data elements.
 		 */
@@ -1070,29 +1089,36 @@ void mdlFinishCache(MDL mdl,int cid)
 				t = &c->pLine[i*c->iLineSize];
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
-				MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+				/*
+				 * Use Synchronous send so as not to
+				 * overwhelm the receiver.
+				 */
+				MPI_Issend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 					 MPI_BYTE, id, MDL_TAG_CACHECOM,
 					 MPI_COMM_WORLD, &reqFlsh); 
-				mdlCacheCheck(mdl); /* service incoming */
-				MPI_Wait(&reqFlsh, &status);
+				/*
+				 * Wait for the Flush to complete, but
+				 * also service any incoming cache requests.
+				*/
+				reqBoth[0] = mdl->ReqRcv;
+				reqBoth[1] = reqFlsh;
+				
+				while(1) {
+				    MPI_Waitany(2, reqBoth, &index, &status);
+				    assert(!(index != 0 && reqBoth[0] ==
+					   MPI_REQUEST_NULL));
+				    mdl->ReqRcv = reqBoth[0];
+				    if(index == 1) /* Flush has completed */
+					break;
+				    else if(index == 0) {
+					mdlCacheReceive(mdl, NULL);
+					reqBoth[0] = mdl->ReqRcv;
+					}
+				    else
+					assert(0);
+				    }
 				}
 			}
-		/*
-		 * Extra checkout to insure Flushes are all processed.
-		 */
-		caOut.cid = cid;
-		caOut.mid = MDL_MID_CACHEOUT;
-		caOut.id = mdl->idSelf;
-		for(id = 0; id < mdl->nThreads; id++) {
-		    if(id == mdl->idSelf)
-			continue;
-		    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
-			     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
-		    }
-		++c->nCheckOut;
-		while(c->nCheckOut < mdl->nThreads)
-		    mdlCacheReceive(mdl, NULL);
-		c->nCheckOut = 0;
 		}
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!
