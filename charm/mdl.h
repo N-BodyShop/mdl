@@ -20,17 +20,6 @@ typedef struct cacheTag {
 	int iLink;
 	} CTAG;
 
-/*
- ** This structure should be "maximally" aligned, with 4 ints it
- ** should align up to at least QUAD word, which should be enough.
- */
-typedef struct cacheHeader {
-	int cid;
-	int mid;
-	int id;
-	int iLine;
-	} CAHEAD;
-
 typedef struct cacheSpace {
 	int iType;
 	char *pData;

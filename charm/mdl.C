@@ -249,10 +249,24 @@ Main::Main(CkArgMsg* m)
 	if (!tmp) tmp = argv[0];
 	else ++tmp;
 
+#if 0
+	// LiveVis stuff -polling version
+	liveVisConfig cfg(true, false);
+	CkArrayOptions opts(CkNumPes());
+	liveVisPollInit(cfg, opts);
+#endif
+	
       nfinished = 0;
       MainId = thishandle;
       aId = CProxy_AMdl::ckNew(bDiag, tmp, CkNumPes());
+      //aId = CProxy_AMdl::ckNew(bDiag, tmp, opts);
 	
+#if 0
+	// LiveVis stuff  non- polling version
+	liveVisConfig cfg(true, false);
+	liveVisInit(cfg, aId, drawing_callback);
+#endif
+
       MainId.startMain(m);
     };
 
@@ -378,6 +392,30 @@ MdlCacheMsg* MdlCacheMsg::unpack(void *buf){
     return mesg;
 }
 
+// Creation routines for cache flush all messages.
+void* MdlCacheFlshMsg::alloc(int mnum, size_t size, int *sizes, int priobits){
+    int total_size = size + sizes[0] * sizeof(int)
+	+ sizes[0] * sizes[1] * sizeof(char);
+    MdlCacheFlshMsg * mesg = (MdlCacheFlshMsg *)CkAllocMsg(mnum, total_size,
+						       priobits);
+    mesg->nLines = sizes[0];
+    mesg->pLine = (int *)((char*)mesg + sizeof(MdlCacheFlshMsg));
+    mesg->pszBuf = (char *)((char*)mesg + sizeof(MdlCacheFlshMsg)
+			    + sizes[0]*sizeof(int));
+    return (void *)mesg;
+}
+
+void* MdlCacheFlshMsg::pack(MdlCacheFlshMsg *mesg){
+    return (void *) mesg;
+}
+
+MdlCacheFlshMsg* MdlCacheFlshMsg::unpack(void *buf){
+    MdlCacheFlshMsg *mesg = (MdlCacheFlshMsg*)buf;
+    mesg->pLine = (int *)((char*)mesg + sizeof(MdlCacheFlshMsg));
+    mesg->pszBuf = (char *)((char*)mesg + sizeof(MdlCacheFlshMsg)
+			    + mesg->nLines*sizeof(int));
+    return mesg;
+}
 
 extern "C"
 void mdlFinish(MDL mdl)
@@ -764,83 +802,120 @@ AMdl::reqHandle(MdlMsg * mesg)
 	    }
 	}
 
-#define MDL_MID_CACHEREQ	2
-#define MDL_MID_CACHERPL	3
-#define MDL_MID_CACHEFLSH	5
-
 #define MDL_CHECK_MASK  	0x7f
 #define BILLION				1000000000
 
 void
-AMdl::CacheReceive(MdlCacheMsg *mesg)
+AMdl::CacheRequest(MdlCacheMsg *mesg)
 {
 	CACHE *c;
-	char *pszRcv = mesg->pszBuf;
 	char *pszRpl;
 	char *t;
-	int n,i;
+	int i;
 	int iLineSize;
-	int iDataSize;
 
 	c = &mdl->cache[mesg->ch.cid];
 	assert(c->iType != MDL_NOCACHE);
 	CProxy_AMdl proxyAMdl(aId);
 	MdlCacheMsg *mesgRpl;
 	
-	switch (mesg->ch.mid) {
-	case MDL_MID_CACHEREQ:
-		/*
-		 ** This is the tricky part! Here is where the real deadlock
-		 ** difficulties surface. Making sure to have one buffer per
-		 ** thread solves those problems here.
-		 */
-		t = &c->pData[mesg->ch.iLine*c->iLineSize];
-		if(t+c->iLineSize > c->pData + c->nData*c->iDataSize)
-			iLineSize = c->pData + c->nData*c->iDataSize - t;
-		else
-			iLineSize = c->iLineSize;
-		mesgRpl = new(&c->iLineSize, 0) MdlCacheMsg;
-		
-		pszRpl = mesgRpl->pszBuf;
-		mesgRpl->ch.cid = mesg->ch.cid;
-		mesgRpl->ch.mid = MDL_MID_CACHERPL;
-		mesgRpl->ch.id = mdl->idSelf;
-		for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
-		proxyAMdl[mesg->ch.id].CacheReceive(mesgRpl);
-		delete mesg;
-		break;
-	case MDL_MID_CACHEFLSH:
-		assert(c->iType == MDL_COCACHE);
-		i = mesg->ch.iLine*MDL_CACHELINE_ELTS;
-		t = &c->pData[i*c->iDataSize];
-		/*
-		 ** Make sure we don't combine beyond the number of data elements!
-		 */
-		n = i + MDL_CACHELINE_ELTS;
-		if (n > c->nData) n = c->nData;
-		n -= i;
-		n *= c->iDataSize;
-		iDataSize = c->iDataSize;
-		for (i=0;i<n;i+=iDataSize) {
-			(*c->combine)(&t[i],&pszRcv[i]);
-			}
-		delete mesg;
-		break;
-	case MDL_MID_CACHERPL:
-		/*
-		 ** For now assume no prefetching!
-		 ** This means that this WILL be the reply to this Aquire
-		 ** request.
-		 */
-		msgCache = mesg;
-		if(threadCache)
-		    CthAwaken(threadCache);
-		break;
-	default:
-		assert(0);
-		}
-	}
+	t = &c->pData[mesg->ch.iLine*c->iLineSize];
+	if(t+c->iLineSize > c->pData + c->nData*c->iDataSize)
+		iLineSize = c->pData + c->nData*c->iDataSize - t;
+	else
+		iLineSize = c->iLineSize;
+	mesgRpl = new(&c->iLineSize, 0) MdlCacheMsg;
 
+	pszRpl = mesgRpl->pszBuf;
+	mesgRpl->ch.cid = mesg->ch.cid;
+	mesgRpl->ch.id = mdl->idSelf;
+	for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
+	proxyAMdl[mesg->ch.id].CacheReply(mesgRpl);
+	delete mesg;
+    }
+
+void
+AMdl::CacheReply(MdlCacheMsg *mesg)
+{
+	CACHE *c;
+
+	c = &mdl->cache[mesg->ch.cid];
+	assert(c->iType != MDL_NOCACHE);
+	/*
+	 ** For now assume no prefetching!
+	 ** This means that this WILL be the reply to this Aquire
+	 ** request.
+	 */
+	msgCache = mesg;	// save message
+	if(threadCache)
+	    CthAwaken(threadCache);
+    }
+
+void
+AMdl::CacheFlush(MdlCacheMsg *mesg)
+{
+	CACHE *c;
+	char *pszRcv = mesg->pszBuf;
+	char *t;
+	int n,i;
+	int iDataSize;
+
+	c = &mdl->cache[mesg->ch.cid];
+	assert(c->iType != MDL_NOCACHE);
+	
+	assert(c->iType == MDL_COCACHE);
+	i = mesg->ch.iLine*MDL_CACHELINE_ELTS;
+	t = &c->pData[i*c->iDataSize];
+	/*
+	 ** Make sure we don't combine beyond the number of data elements!
+	 */
+	n = i + MDL_CACHELINE_ELTS;
+	if (n > c->nData) n = c->nData;
+	n -= i;
+	n *= c->iDataSize;
+	iDataSize = c->iDataSize;
+	for (i=0;i<n;i+=iDataSize) {
+		(*c->combine)(&t[i],&pszRcv[i]);
+		}
+	delete mesg;
+    }
+
+void
+AMdl::CacheFlushAll(MdlCacheFlshMsg *mesg)
+{
+	CACHE *c;
+	int *pLine = mesg->pLine;
+	char *pszRcv = mesg->pszBuf;
+	int nLines = mesg->nLines;
+	char *t;
+	int n,i;
+	int iDataSize;
+	int iLine;
+	CProxy_AMdl proxyAMdl(aId);
+
+	c = &mdl->cache[mesg->ch.cid];
+	assert(c->iType != MDL_NOCACHE);
+	
+	assert(c->iType == MDL_COCACHE);
+	for(iLine = 0; iLine < nLines; iLine++) {
+	    i = pLine[iLine]*MDL_CACHELINE_ELTS;
+	    t = &c->pData[i*c->iDataSize];
+	    /*
+	     ** Make sure we don't combine beyond the number of data elements!
+	     */
+	    n = i + MDL_CACHELINE_ELTS;
+	    if (n > c->nData) n = c->nData;
+	    n -= i;
+	    n *= c->iDataSize;
+	    iDataSize = c->iDataSize;
+	    for (i=0;i<n;i+=iDataSize) {
+		    (*c->combine)(&t[i],&pszRcv[i]);
+		}
+	    pszRcv += c->iLineSize;
+	    }
+	proxyAMdl[mesg->ch.id].flushreply();
+	delete mesg;
+    }
 
 void AdjustDataSize(MDL mdl)
 {
@@ -893,22 +968,11 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 {
 	CACHE *c;
 	int i,nMaxCacheIds;
-	int first;
 
 	/*
 	 ** Allocate more cache spaces if required!
 	 */
 	assert(cid >= 0);
-	/*
-	 * first cache?
-	 */
-	first = 1;
-	for(i = 0; i < mdl->nMaxCacheIds; ++i) {
-	    if(mdl->cache[i].iType != MDL_NOCACHE) {
-		first = 0;
-		break;
-		}
-	    }
 	
 	if (cid >= mdl->nMaxCacheIds) {
 		/*
@@ -998,6 +1062,8 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 void
 AMdl::barrierRel()
 {
+    assert(threadBarrier);
+    
     CthAwaken(threadBarrier);
     threadBarrier = 0;
     }
@@ -1021,10 +1087,31 @@ AMdl::barrier()
 {
     CProxy_AMdl proxyAMdl(aId);
     
-    proxyAMdl[0].barrierEnter();
     threadBarrier = CthSelf();
-    CthSuspend();
+    proxyAMdl[0].barrierEnter();
+    if(threadBarrier)
+	CthSuspend();
 }
+
+void
+AMdl::flushreply()
+{
+    nFlush--;
+    if(nFlush == 0) {
+	assert(threadBarrier);
+	CthAwaken(threadBarrier);
+	threadBarrier = 0;
+	}
+    }
+
+void
+AMdl::waitflush()
+{
+    if(nFlush) {
+	threadBarrier = CthSelf();
+	CthSuspend();
+	}
+    }
 
 /*
  ** Initialize a Read-Only caching space.
@@ -1070,41 +1157,79 @@ extern "C"
 void mdlFinishCache(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
-	char *pszFlsh;
 	int i,id;
 	char *t;
 	int j, iKey;
 	CProxy_AMdl proxyAMdl(aId);
 
 	if (c->iType == MDL_COCACHE) {
-		/*
-		 ** Must flush all valid data elements.
-		 */
+	    /*
+	     ** Must flush all valid data elements.
+	     */
+	    /*
+	     * Do it a processor at a time
+	     */
+	    int idFlush;
+
+	    proxyAMdl[mdl->idSelf].ckLocal()->nFlush = 0;
+	    for(idFlush = 0; idFlush < mdl->nThreads; idFlush++) {
+		int iLine = 0;
+		
+		if(idFlush == mdl->idSelf)
+		    continue;
+		
+		/* first count lines */
+		for (i=1;i<c->nLines;++i) {
+		    iKey = c->pTag[i].iKey;
+		    if (iKey >= 0) {
+			id = iKey & c->iIdMask;
+			if(id == idFlush)
+			    iLine++;
+			}
+		    }
+		if(iLine == 0)
+		    continue;
+		
+		int iFlushSize[2];
+		iFlushSize[0] = iLine;
+		iFlushSize[1] = c->iLineSize;
+
+		MdlCacheFlshMsg *mesgFlsh = new(iFlushSize,0) MdlCacheFlshMsg;
+		char *pszFlsh = mesgFlsh->pszBuf;
+		int *pLine = mesgFlsh->pLine;
+		mesgFlsh->ch.cid = cid;
+		mesgFlsh->ch.id = mdl->idSelf;
+
+		iLine = 0;
 		for (i=1;i<c->nLines;++i) {
 			iKey = c->pTag[i].iKey;
 			if (iKey >= 0) {
 				/*
 				 ** Flush element since it is valid!
 				 */
-			    MdlCacheMsg *mesgFlsh = new(&c->iLineSize,0)
-				MdlCacheMsg;
-			    pszFlsh = mesgFlsh->pszBuf;
-			    mesgFlsh->ch.cid = cid;
-			    mesgFlsh->ch.mid = MDL_MID_CACHEFLSH;
-			    mesgFlsh->ch.id = mdl->idSelf;
-			    mesgFlsh->ch.iLine = iKey >> c->iInvKeyShift;
-			    t = &c->pLine[i*c->iLineSize];
-			    for(j = 0; j < c->iLineSize; ++j)
-				pszFlsh[j] = t[j];
 			    id = iKey & c->iIdMask;
-			    proxyAMdl[id].CacheReceive(mesgFlsh);
+			    if(id == idFlush) {
+				pLine[iLine] = iKey >> c->iInvKeyShift;
+				t = &c->pLine[i*c->iLineSize];
+				for(j = 0; j < c->iLineSize; ++j)
+				    pszFlsh[j] = t[j];
+				iLine++;
+				pszFlsh += c->iLineSize;
+				}
 			    }
-			/*
-			 * Check for any incoming cache requests.
-			*/
-			mdlCacheCheck(mdl);
 			}
+
+		assert(mesgFlsh->nLines == iLine);
+		
+		proxyAMdl[mdl->idSelf].ckLocal()->nFlush++;
+		proxyAMdl[idFlush].CacheFlushAll(mesgFlsh);
+		/*
+		 * Check for any incoming cache requests.
+		 */
+		mdlCacheCheck(mdl);
 		}
+	    proxyAMdl[mdl->idSelf].ckLocal()->waitflush();
+	    }
 	proxyAMdl[mdl->idSelf].ckLocal()->barrier();
 	/*
 	 ** Free up storage and finish.
@@ -1207,12 +1332,11 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 
 	MdlCacheMsg *mesg = new(&nRequestBytes, 0) MdlCacheMsg;
 	mesg->ch.cid = cid;
-	mesg->ch.mid = MDL_MID_CACHEREQ;
 	mesg->ch.id = mdl->idSelf;
 	mesg->ch.iLine = iLine;
 
 	CProxy_AMdl proxyAMdl(aId);
-	proxyAMdl[id].CacheReceive(mesg);
+	proxyAMdl[id].CacheRequest(mesg);
 	
 	++c->nMiss;
 	/*
@@ -1257,12 +1381,11 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 			
 			pszFlsh = mesgFlsh->pszBuf;
 		        mesgFlsh->ch.cid = cid;
-			mesgFlsh->ch.mid = MDL_MID_CACHEFLSH;
 			mesgFlsh->ch.id = mdl->idSelf;
 			mesgFlsh->ch.iLine = iKeyVic >> c->iInvKeyShift;
 			for(i = 0; i < c->iLineSize; ++i)
 			    pszFlsh[i] = pLine[i];
-			proxyAMdl[idVic].CacheReceive(mesgFlsh);
+			proxyAMdl[idVic].CacheFlush(mesgFlsh);
 			}
 		/*
 		 ** If valid iLine then "unlink" it from the cache.
@@ -1304,7 +1427,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	mesg = proxyAMdl[mdl->idSelf].ckLocal()->waitCache();
 	assert(mesg->ch.id == id);
 	assert(mesg->ch.cid == cid);
-	assert(mesg->ch.mid == MDL_MID_CACHERPL);
 	
 	char *pszLine = mesg->pszBuf;
 	for(i = 0; i < c->iLineSize; i++)

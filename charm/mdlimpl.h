@@ -23,6 +23,17 @@ typedef struct srvHeader {
 	int nOutBytes;
 	} SRVHEAD;
 
+/*
+ ** This structure should be "maximally" aligned, with 4 ints it
+ ** should align up to at least QUAD word, which should be enough.
+ */
+typedef struct cacheHeader {
+	int cid;
+	int mid;
+	int id;
+	int iLine;
+	} CAHEAD;
+
 class MdlMsg : public CMessage_MdlMsg 
 {
  public:
@@ -54,6 +65,19 @@ class MdlCacheMsg : public CMessage_MdlCacheMsg
     static void *alloc(int mnum, size_t size, int *sizes, int priobits);
     static void *pack(MdlCacheMsg *msg);
     static MdlCacheMsg *unpack(void *buf);  
+    };
+
+class MdlCacheFlshMsg : public CMessage_MdlCacheFlshMsg 
+{
+ public:
+    CAHEAD ch;
+    int nLines;
+    int *pLine;
+    char *pszBuf;
+
+    static void *alloc(int mnum, size_t size, int *sizes, int priobits);
+    static void *pack(MdlCacheFlshMsg *msg);
+    static MdlCacheFlshMsg *unpack(void *buf);  
     };
 
 extern "C"
@@ -96,6 +120,7 @@ public:
     int idReplyWait;
     MdlCacheMsg *msgCache;
     int nInBar;
+    int nFlush;
     
     MDL mdl;
     AMdl(int bDiag, char *progname);
@@ -112,11 +137,16 @@ public:
     void stopSrv();
     void reqReply(MdlMsg * mesg);
     void reqHandle(MdlMsg * mesg);
-    void CacheReceive(MdlCacheMsg *mesg);
+    void CacheRequest(MdlCacheMsg *mesg);
+    void CacheReply(MdlCacheMsg *mesg);
+    void CacheFlush(MdlCacheMsg *mesg);
+    void CacheFlushAll(MdlCacheFlshMsg *mesg);
     MdlCacheMsg *waitCache() ;
     void barrier();
     void barrierEnter();
     void barrierRel();
+    void flushreply();
+    void waitflush();
 };
 
 #endif
