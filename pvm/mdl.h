@@ -12,7 +12,6 @@
 
 typedef struct cacheTag {
 	int iKey;
-	int id;
 	int nLock;
 	int nLast;
 	int iLink;

@@ -607,12 +607,12 @@ void mdlFree(MDL mdl,void *p)
 
 
 /*
- ** Initialize a caching space.
+ ** Common initialization for all types of caches.
  */
-void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
+CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 {
 	CACHE *c;
-	int i,id,nMaxCacheIds;
+	int i,nMaxCacheIds;
 
 	/*
 	 ** Allocate more cache spaces if required!
@@ -636,7 +636,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 		}
 	c = &mdl->cache[cid];
 	assert(c->iType == MDL_NOCACHE);
-	c->iType = MDL_ROCACHE;
 	c->pData = pData;
 	c->iDataSize = iDataSize;
 	c->nData = nData;
@@ -661,7 +660,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	assert(c->pTag != NULL);
 	for (i=0;i<c->nLines;++i) {
 		c->pTag[i].iKey = -1;	/* invalid */	
-		c->pTag[i].id = -1;		/* invalid */	
 		c->pTag[i].nLock = 0;
 		c->pTag[i].nLast = 0;
 		c->pTag[i].iLink = 0;
@@ -697,13 +695,62 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->flsh[0] = cid;
 	c->flsh[1] = MDL_MID_CACHEFLSH;
 	c->flsh[2] = mdl->idSelf;
+	c->nCheckIn = 0;
 	c->nCheckOut = 0;
+	return(c);
+	}
+
+
+/*
+ ** Initialize a Read-Only caching space.
+ */
+void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
+{
+	CACHE *c;
+	int id;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+	c->iType = MDL_ROCACHE;
 	c->init = NULL;
 	c->combine = NULL;
-	c->nCheckIn = 1;
 	/*
 	 ** Send checkin to all other threads.
 	 */
+	++c->nCheckIn;
+	for (id=0;id<mdl->nThreads;++id) {
+		if (id == mdl->idSelf) continue;
+		pvm_initsend(PvmDataRaw);
+		pvm_pkint(c->chki,4,1);
+		pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+		}
+	/*
+	 ** Keep on servicing until nCheckIn == nThreads!
+	 ** THIS IS A SYNCHRONIZE!!!
+	 */
+	while (c->nCheckIn < mdl->nThreads) {
+		mdlCacheReceive(mdl,NULL);
+		}	
+	AdjustDataSize(mdl);
+	}
+
+
+/*
+ ** Initialize a Combiner caching space.
+ */
+void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
+				void (*init)(void *),void (*combine)(void *,void *))
+{
+	CACHE *c;
+	int id;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+	c->iType = MDL_COCACHE;
+	c->init = init;
+	c->combine = combine;
+	/*
+	 ** Send checkin to all other threads.
+	 */
+	++c->nCheckIn;
 	for (id=0;id<mdl->nThreads;++id) {
 		if (id == mdl->idSelf) continue;
 		pvm_initsend(PvmDataRaw);
@@ -725,28 +772,27 @@ void mdlFinishCache(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
 	int id;
-#if (0)
-	int i,iLine;
+	int i,iKey;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
 		 ** Must flush all valid data elements.
 		 */
 		for (i=1;i<c->nLines;++i) {
-			iLine = c->pTag[i].iLine;
-			if (iLine >= 0) {
+			iKey = c->pTag[i].iKey;
+			if (iKey >= 0) {
 				/*
 				 ** Flush element since it is valid!
 				 */
-				c->flsh[3] = iLine;
+				id = iKey%mdl->nThreads;
+				c->flsh[3] = iKey/mdl->nThreads;
 				pvm_initsend(PvmDataRaw);
 				pvm_pkint(c->flsh,4,1);
 				pvm_pkbyte(&c->pLine[i*c->iLineSize],c->iLineSize,1);
-				pvm_send(mdl->atid[c->pTag[i].id],MDL_TAG_CACHECOM);
+				pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
 				}
 			}
 		}
-#endif
 	/*
 	 ** Send checkout to all other threads.
 	 */
@@ -788,7 +834,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 {
 	CACHE *c = &mdl->cache[cid];
 	char *pLine;
-	int iElt,iLine,i,iKey,iKeyVic,nKeyNew;
+	int iElt,iLine,i,iKey,iKeyVic,idVic,nKeyNew;
 	int iVictim,*pi;
 	char ach[80];
 
@@ -879,18 +925,17 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	 */
 	pLine = &c->pLine[iVictim*c->iLineSize];
 	if (iKeyVic >= 0) {
-#if (0)
 		if (c->iType == MDL_COCACHE) {
 			/*
 			 ** Flush element since it is valid!
 			 */
-			c->flsh[3] = iLineVic;
+			idVic = iKeyVic%mdl->nThreads;
+			c->flsh[3] = iKeyVic/mdl->nThreads;
 			pvm_initsend(PvmDataRaw);
 			pvm_pkint(c->flsh,4,1);
 			pvm_pkbyte(pLine,c->iLineSize,1);
-			pvm_send(mdl->atid[c->pTag[iVictim].id],MDL_TAG_CACHECOM);
+			pvm_send(mdl->atid[idVic],MDL_TAG_CACHECOM);
 			}
-#endif
 		/*
 		 ** If valid iLine then "unlink" it from the cache.
 		 */
@@ -899,7 +944,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		*pi = c->pTag[iVictim].iLink;
 		}
 	c->pTag[iVictim].iKey = iKey;
-	c->pTag[iVictim].id = id;	
 	c->pTag[iVictim].nLock = 1;
 	c->pTag[iVictim].nLast = c->nAccess;
 	/*
