@@ -622,7 +622,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		assert(pLine != NULL);
 		iLineSize = c->iLineSize;
 		for (i=0;i<iLineSize;++i) pLine[i] = pszRcv[i];
-		if (c->iType == MDL_COCACHE) {
+		if (c->iType == MDL_COCACHE && c->init) {
 			/*
 			 ** Call the initializer function for all elements in 
 			 ** the cache line.
