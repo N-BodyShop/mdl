@@ -9,16 +9,15 @@
 #include <math.h>
 #include <limits.h>
 #include <assert.h>
+#include <stdarg.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include "mpi.h"
 #include "mdl.h"
 
-
 #define MDL_NOCACHE			0
 #define MDL_ROCACHE			1
 #define MDL_COCACHE			2
-
 
 #define MDL_DEFAULT_BYTES		80000
 #define MDL_DEFAULT_SERVICES	50
@@ -61,6 +60,78 @@ double mdlCpuTimer(MDL mdl)
 #endif
 	}
 
+/* 
+ * MDL debug and Timer functions 
+ */
+#define MDLPRINTF_STRING_MAXLEN 256
+void mdlprintf( MDL mdl, const char *format, ... )
+{
+     static char ach[MDLPRINTF_STRING_MAXLEN];
+     va_list args;
+
+     if (mdl->bDiag) {	
+         va_start( args, format);
+         vsnprintf( ach, MDLPRINTF_STRING_MAXLEN, format, args);
+         mdlDiag( mdl, ach);
+         va_end( args);
+         }
+}
+
+#ifdef MDLDEBUG
+void mdldebug( MDL mdl, const char *format, ... )
+{
+     static char ach[MDLPRINTF_STRING_MAXLEN];
+     va_list args;
+
+     if (mdl->bDiag) {	
+         va_start( args, format);
+	 vsnprintf( ach, MDLPRINTF_STRING_MAXLEN, format, args);
+	 mdlDiag( mdl, ach);
+	 va_end( args);
+         }
+}
+#endif
+
+#ifdef MDLTIMER
+void mdlZeroTimer(MDL mdl, mdlTimer *t)
+{
+  struct timezone tz;
+  struct timeval tv;
+  struct rusage ru;
+  tz.tz_minuteswest = 0;
+  tz.tz_dsttime = 0;
+  gettimeofday(&tv,&tz);
+  t->wallclock = tv.tv_sec + 1e-6*(double) tv.tv_usec;
+  getrusage(0,&ru);
+  t->cpu = (double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec;
+  t->system = (double)ru.ru_stime.tv_sec + 1e-6*(double)ru.ru_stime.tv_usec;
+}
+
+void mdlGetTimer(MDL mdl, mdlTimer *t0, mdlTimer *t)
+{
+  struct timezone tz;
+  struct timeval tv;
+  struct rusage ru;
+
+  getrusage(0,&ru);
+  t->cpu = (double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec - t0->cpu;
+  t->system = (double)ru.ru_stime.tv_sec + 1e-6*(double)ru.ru_stime.tv_usec - t0->system;
+  tz.tz_minuteswest = 0;
+  tz.tz_dsttime = 0;
+  gettimeofday(&tv,&tz);
+  t->wallclock = tv.tv_sec + 1e-6*(double) tv.tv_usec - t0->wallclock;
+}
+
+void mdlPrintTimer(MDL mdl,char *message, mdlTimer *t0) 
+{
+  mdlTimer lt;
+
+  if (mdl->bDiag) {	
+      mdlGetTimer(mdl,t0,&lt);
+      mdlprintf(mdl,"%s %f %f %f\n",message,lt.wallclock,lt.cpu,lt.system);
+      }
+}
+#endif
 
 int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 {

@@ -1,9 +1,7 @@
 #
 #       SPX makefile for MDL
 #
-CC_FLAGS = -g -O3
-
 default: mdl.o
 
 mdl.o: mdl.c mdl.h
-	mpicc $(CC_FLAGS) -c mdl.c
+	$(CC) $(CC_FLAGS) -c mdl.c
