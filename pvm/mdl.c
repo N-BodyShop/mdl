@@ -287,6 +287,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 ** Start bilateral transfers. Note: One processor is GUARANTEED to 
 	 ** complete all its transfers.
 	 */
+	assert(nBufBytes >= nOutBytes);
 	pszOut = &pszBuf[nBufBytes-nOutBytes];
 	pszIn = pszBuf;
 	while (nOutBytes && nInBytes) {
@@ -792,6 +793,7 @@ void mdlFinishCache(MDL mdl,int cid)
 				pvm_pkint(c->flsh,4,1);
 				pvm_pkbyte(&c->pLine[i*c->iLineSize],c->iLineSize,1);
 				pvm_send(mdl->atid[id],MDL_TAG_CACHECOM);
+				mdlCacheCheck(mdl); /* service incoming */
 				}
 			}
 		}
