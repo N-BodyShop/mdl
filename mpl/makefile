@@ -1,7 +1,7 @@
 #
 #       SPX makefile for MDL
 #
-CC_FLAGS = -O2
+CC_FLAGS = -g
 
 default: mdl.o
 

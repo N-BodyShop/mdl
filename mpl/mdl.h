@@ -83,6 +83,7 @@ typedef struct mdlContext {
 	int iCaBufSize;
 	char *pszRcv;
 	int midRcv;
+	int *pmidRpl;
 	char **ppszRpl;
 	int nMaxCacheIds;
 	CACHE *cache;

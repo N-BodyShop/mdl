@@ -162,6 +162,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	assert(mdl->pszRcv != NULL);
 	mdl->ppszRpl = malloc(mdl->nThreads*sizeof(char *));
 	assert(mdl->ppszRpl != NULL);
+	mdl->pmidRpl = malloc(mdl->nThreads*sizeof(int));
+	assert(mdl->pmidRpl != NULL);
 	for (i=0;i<mdl->nThreads;++i) {
 		mdl->ppszRpl[i] = malloc(mdl->iCaBufSize);
 		assert(mdl->ppszRpl[i] != NULL);
@@ -531,7 +533,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	CAHEAD *phRpl;
 	char *pszRpl;
 	char *t;
-	int n,i,msgid;
+	int n,i,msgid,nBytes;
 
 	c = &mdl->cache[ph->cid];
 	switch (ph->mid) {
@@ -553,8 +555,14 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		phRpl->mid = MDL_MID_CACHERPL;
 		t = &c->pData[ph->iLine*c->iLineSize];
 		for (i=0;i<c->iLineSize;++i) pszRpl[i] = t[i];
+		if (mdl->pmidRpl[ph->id] != -1) {
+			/*
+			 ** Wait for the prior send to free up internal buffers.
+			 */
+			mpc_wait(&mdl->pmidRpl[ph->id],&nBytes);
+			}
 		mpc_send(phRpl,sizeof(CAHEAD)+c->iLineSize,ph->id,MDL_TAG_CACHECOM,
-				 &msgid);
+				 &mdl->pmidRpl[ph->id]);
 		return(0);
 	case MDL_MID_CACHEFLSH:
 		assert(c->iType == MDL_COCACHE);
@@ -641,7 +649,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	CACHE *c;
 	int i,id,nMaxCacheIds,bFirst;
 	CAHEAD caIn;
-	int msgid,iTag,nBytes;
+	int msgid,iTag,nBytes,ret;
 
 printf("%d:enter ROcache\n",mdl->idSelf);
 	/*
@@ -723,13 +731,13 @@ printf("%d:enter ROcache\n",mdl->idSelf);
 	caIn.mid = MDL_MID_CACHEIN;
 	caIn.id = mdl->idSelf;
 	for (id=0;id<mdl->nThreads;++id) {
-		if (id == mdl->idSelf) continue;
 		/*
 		 ** Must use non-blocking sends here, we will never wait
 		 ** for these sends to complete, but will know for sure
 		 ** that they have completed.
 		 */
-		mpc_send(&caIn,sizeof(CAHEAD),id,MDL_TAG_CACHECOM,&msgid);
+		ret = mpc_bsend(&caIn,sizeof(CAHEAD),id,MDL_TAG_CACHECOM);
+		assert(ret == 0);
 		}
 	/*
 	 ** See if we need to post the FIRST nonblocking receive!
@@ -739,15 +747,22 @@ printf("%d:enter ROcache\n",mdl->idSelf);
 		if (mdl->cache[i].iType != MDL_NOCACHE) bFirst = 0;
 		}
 	c->iType = MDL_ROCACHE;
+	/*
+	 ** If this is the first time we start the a cache then clear the
+	 ** midRpl's for each processor.
+	 */
+	if (bFirst) {
+		for (i=0;i<mdl->nThreads;++i) mdl->pmidRpl[i] = -1;
+		}
 	if (bFirst && mdl->nThreads > 1) {
 		id = mdl->dontcare;
 		iTag = MDL_TAG_CACHECOM;
-		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		ret = mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
+		assert(ret == 0);
 		}
 	/*
 	 ** Keep on servicing until nCheckIn == nThreads!
 	 */
-	++c->nCheckIn;
 	while (c->nCheckIn < mdl->nThreads) {
 		mpc_wait(&mdl->midRcv,&nBytes);
 		mdlCacheReceive(mdl,NULL);
@@ -769,7 +784,7 @@ printf("%d:enter ROcache\n",mdl->idSelf);
 	  id = mdl->dontcare;
 	  iTag = MDL_TAG_CACHECOM;
 	  mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
-	}
+	  }
 printf("%d:exit ROcache\n",mdl->idSelf);
 	}
 
@@ -785,18 +800,17 @@ printf("%d:enter FinishCache\n",mdl->idSelf);
 	caOut.mid = MDL_MID_CACHEOUT;
 	caOut.id = mdl->idSelf;
 	for (id=0;id<mdl->nThreads;++id) {
-		if (id == mdl->idSelf) continue;
 		/*
-		 ** Must use non-blocking sends here, we will never wait
+		 ** Must use non-blocking (or buffered as is the case here)
+		 ** sends here, we will never wait
 		 ** for these sends to complete, but will know for sure
 		 ** that they have completed.
 		 */
-		mpc_send(&caOut,sizeof(CAHEAD),id,MDL_TAG_CACHECOM,&msgid);
+		mpc_bsend(&caOut,sizeof(CAHEAD),id,MDL_TAG_CACHECOM);
 		}
 	/*
 	 ** Keep on servicing until nCheckOut == nThreads!
 	 */
-	++c->nCheckOut;
 	while (c->nCheckOut < mdl->nThreads) {
 		mpc_wait(&mdl->midRcv,&nBytes);
 		mdlCacheReceive(mdl,NULL);
@@ -831,7 +845,7 @@ printf("%d:enter FinishCache\n",mdl->idSelf);
 		iTag = MDL_TAG_CACHECOM;
 		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&id,&iTag,&mdl->midRcv);
 		}
-printf("%d:exit FinishCache\n",mdl->idSelf);
+printf("%d:exit FinishCache %d\n",mdl->idSelf,mpc_status(mdl->midRcv));
 	}
 
 
@@ -844,23 +858,23 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	int idRcv,iTag,msgid,ret,nBytes;
 	char ach[80];
 
-printf("%d:enter Aquire\n",mdl->idSelf);
 	if (++c->nAccess == MDL_CHECK_INTERVAL) {
 	    if (mdl->nThreads > 1) {
-		if (mpc_status(mdl->midRcv) >= 0) {
-			mdlCacheReceive(mdl,NULL);
-			idRcv = mdl->dontcare;
-			iTag = MDL_TAG_CACHECOM;
-			mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
+			if (mpc_status(mdl->midRcv) >= 0) {
+				mpc_wait(&mdl->midRcv,&nBytes);
+				mdlCacheReceive(mdl,NULL);
+				idRcv = mdl->dontcare;
+				iTag = MDL_TAG_CACHECOM;
+				mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&idRcv,&iTag,
+						 &mdl->midRcv);
+				}
 			}
+		c->nAccess = 0;
 		}
-	  c->nAccess = 0;
-	  }
 	/*
 	 ** Is it a local request?
 	 */
 	if (id == mdl->idSelf) {
-printf("%d:exit Aquire: local\n",mdl->idSelf);
 		return(&c->pData[iIndex*c->iDataSize]);
 		}
 	/*
@@ -886,7 +900,7 @@ printf("%d:exit Aquire: local\n",mdl->idSelf);
 	 ** Cache Miss.
 	 */
 	c->caReq.iLine = iLine;
-	mpc_send(&c->caReq,sizeof(CAHEAD),id,MDL_TAG_CACHECOM,&msgid);
+	mpc_bsend(&c->caReq,sizeof(CAHEAD),id,MDL_TAG_CACHECOM);
 	/*
 	 **	Victim Search!
 	 ** Note: if more than 1771875 cache lines are present this random
@@ -953,9 +967,8 @@ printf("%d:exit Aquire: local\n",mdl->idSelf);
 		iTag = MDL_TAG_CACHECOM;
 		mpc_recv(mdl->pszRcv,mdl->iCaBufSize,&idRcv,&iTag,&mdl->midRcv);
 		if (ret) {
-printf("%d:exit Aquire: rpl received\n",mdl->idSelf);
 		  return(&pLine[iElt*c->iDataSize]);
-                  }
+		  }
 		}
 	}
 
