@@ -18,7 +18,11 @@
 #define MDL_COCACHE			2
 
 
-#define PVM_TRANS_SIZE	50000 
+#define MDL_DEFAULT_BYTES		4096
+#define MDL_DEFAULT_SERVICES	50
+#define MDL_DEFAULT_CACHEIDS	5
+
+#define PVM_TRANS_SIZE		50000 
 #define MDL_TAG_INIT 		1
 #define MDL_TAG_SWAPINIT 	2
 #define MDL_TAG_SWAP		3
@@ -26,8 +30,7 @@
 #define MDL_TAG_RPL			5
 
 
-void _srvNull(void *p1,char *pszIn,int nInBytes,char *pszOut,
-			  int *pnOutBytes)
+void _srvNull(void *p1,void *vin,int nIn,void *vout,int *pnOut)
 {
 	return;
 	}
@@ -42,13 +45,11 @@ double mdlCpuTimer(MDL mdl)
 	}
 
 
-/*
- */
 int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 {
 	MDL mdl;
 	int tidSelf;
-	int i,nThreads,nArch,bid,bDiag,bThreads,iLen,ret;
+	int i,nThreads,nArch,bid,bDiag,bThreads,iLen;
 	struct pvmhostinfo *hostp;
 	char *p,ach[256],achDiag[256],name[256];
 
@@ -56,10 +57,54 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	mdl = malloc(sizeof(struct mdlContext));
 	assert(mdl != NULL);
 	/*
+	 ** Set default "maximums" for structures. These are NOT hard
+	 ** maximums, as the structures will be realloc'd when these
+	 ** values are exceeded.
+	 */
+	mdl->nMaxServices = MDL_DEFAULT_SERVICES;
+	mdl->nMaxInBytes = MDL_DEFAULT_BYTES;
+	mdl->nMaxOutBytes = MDL_DEFAULT_BYTES;
+	mdl->nMaxCacheIds = MDL_DEFAULT_CACHEIDS;
+	/*
+	 ** Now allocate the initial service slots.
+	 */
+	mdl->psrv = malloc(mdl->nMaxServices*sizeof(SERVICE));
+	assert(mdl->psrv != NULL);
+	/*
+	 ** Initialize the new service slots.
+	 */
+	for (i=0;i<mdl->nMaxServices;++i) {
+		mdl->psrv[i].p1 = NULL;
+		mdl->psrv[i].nInBytes = 0;
+		mdl->psrv[i].nOutBytes = 0;
+		mdl->psrv[i].fcnService = NULL;
+		}
+	/*
 	 ** Provide a 'null' service for sid = 0, so that stopping the 
 	 ** service handler is well defined!
 	 */
-	mdl->pfcnService[0] = _srvNull;
+	mdl->psrv[0].p1 = NULL;
+	mdl->psrv[0].nInBytes = 0;
+	mdl->psrv[0].nOutBytes = 0;
+	mdl->psrv[0].fcnService = _srvNull;
+	/*
+	 ** Allocate service buffers.
+	 */
+	mdl->pszIn = malloc(mdl->nMaxInBytes);
+	assert(mdl->pszIn != NULL);
+	mdl->pszOut = malloc(mdl->nMaxOutBytes);
+	assert(mdl->pszOut != NULL);
+	/*
+	 ** Allocate initial cache spaces.
+	 */
+	mdl->cache = malloc(mdl->nMaxCacheIds*sizeof(CACHE));
+	assert(mdl->cache != NULL);
+	/*
+	 ** Initialize caching spaces.
+	 */
+	for (i=0;i<mdl->nMaxCacheIds;++i) {
+		mdl->cache[i].iType = MDL_NOCACHE;
+		}
 	/*
 	 ** Do some low level argument parsing for number of threads, and
 	 ** diagnostic flag!
@@ -95,12 +140,6 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	mdl->nThreads = nThreads;
 	mdl->atid = malloc(mdl->nThreads*sizeof(int));
 	assert(mdl->atid != NULL);
-	/*
-	 ** Initialize caching spaces.
-	 */
-	for (i=0;i<MDL_MAX_CACHE_SPACES;++i) {
-		mdl->cache[i].iType = MDL_NOCACHE;
-		}
 	*pmdl = mdl;
 	if (nThreads > 1) {
 		if (pvm_parent() < 0) {
@@ -109,8 +148,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 			 */
 			mdl->idSelf = 0;
 			mdl->atid[mdl->idSelf] = tidSelf;
-			ret = pvm_spawn(argv[0],argv,PvmTaskDefault,NULL,mdl->nThreads-1,
-							&mdl->atid[1]);
+			pvm_spawn(argv[0],argv,PvmTaskDefault,NULL,mdl->nThreads-1,
+					  &mdl->atid[1]);
 			pvm_initsend(PvmDataRaw);
 			pvm_pkint(mdl->atid,mdl->nThreads,1);
 			iLen = strlen(argv[0])+1;
@@ -122,7 +161,6 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 				mdl->fpDiag = fopen(achDiag,"w");
 				assert(mdl->fpDiag != NULL);
 				}
-			return(nThreads);
 			}
 		else {
 			/*
@@ -157,8 +195,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 			mdl->fpDiag = fopen(achDiag,"w");
 			assert(mdl->fpDiag != NULL);
 			}
-		return(nThreads);
 		}
+	return(nThreads);
 	}
 
 
@@ -174,6 +212,10 @@ void mdlFinish(MDL mdl)
 	 ** Deregister from PVM and deallocate storage.
 	 */
 	if (mdl->nThreads > 1) pvm_exit();
+	free(mdl->psrv);
+	free(mdl->pszIn);
+	free(mdl->pszOut);
+	free(mdl->cache);
 	free(mdl->atid);
 	free(mdl);
 	}
@@ -216,10 +258,11 @@ int mdlSelf(MDL mdl)
  ** of the others memory, however he will have successfully transfered all
  ** of his memory.
  */
-int mdlSwap(MDL mdl,int id,int nBufBytes,char *pszBuf,int nOutBytes,
+int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 			int *pnSndBytes,int *pnRcvBytes)
 {
 	int tid,bid,nInBytes,nOutBufBytes,nInMax,nOutMax;
+	char *pszBuf = vBuf;
 	char *pszIn,*pszOut;
 
 	tid = mdl->atid[id];
@@ -313,15 +356,53 @@ void mdlDiag(MDL mdl,char *psz)
 	}
 
 
-void mdlAddService(MDL mdl,int sid,void *p1,void (*fcnService)())
+void mdlAddService(MDL mdl,int sid,void *p1,
+				   void (*fcnService)(void *,void *,int,void *,int *),
+				   int nInBytes,int nOutBytes)
 {
-	mdl->pp1[sid] = p1;
-	mdl->pfcnService[sid] = fcnService;
+	int i,nMaxServices;
+
+	assert(sid > 0);
+	if (sid >= mdl->nMaxServices) {
+		/*
+		 ** reallocate service buffer, adding space for 8 new services
+		 ** including the one just defined.
+		 */
+		nMaxServices = sid + 9;
+		mdl->psrv = realloc(mdl->psrv,nMaxServices*sizeof(SERVICE));
+		assert(mdl->psrv != NULL);
+		/*
+		 ** Initialize the new service slots.
+		 */
+		for (i=mdl->nMaxServices;i<nMaxServices;++i) {
+			mdl->psrv[i].p1 = NULL;
+			mdl->psrv[i].nInBytes = 0;
+			mdl->psrv[i].nOutBytes = 0;
+			mdl->psrv[i].fcnService = NULL;
+			}
+		mdl->nMaxServices = nMaxServices;
+		}
+	/*
+	 ** Make sure the service buffers are big enough!
+	 */
+	if (nInBytes > mdl->nMaxInBytes) {
+		mdl->pszIn = realloc(mdl->pszIn,nInBytes);
+		mdl->nMaxInBytes = nInBytes;
+		}
+	if (nOutBytes > mdl->nMaxOutBytes) {
+		mdl->pszOut = realloc(mdl->pszOut,nOutBytes);
+		mdl->nMaxOutBytes = nOutBytes;
+		}
+	mdl->psrv[sid].p1 = p1;
+	mdl->psrv[sid].nInBytes = nInBytes;
+	mdl->psrv[sid].nOutBytes = nOutBytes;
+	mdl->psrv[sid].fcnService = fcnService;
 	}
 
 
-void mdlReqService(MDL mdl,int id,int sid,char *pszIn,int nInBytes)
+void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 {
+	char *pszIn = vin;
 	int tid;
 
 	tid = mdl->atid[id];
@@ -335,14 +416,15 @@ void mdlReqService(MDL mdl,int id,int sid,char *pszIn,int nInBytes)
 	}
 
 
-void mdlGetReply(MDL mdl,int id,char *pszOut,int *pnOutBytes)
+void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 {
+	char *pszOut = vout;
 	int tid,bid,nOutBytes;
 
 	tid = mdl->atid[id];
 	bid = pvm_recv(tid,MDL_TAG_RPL);
 	pvm_upkint(&nOutBytes,1,1);
-	if (nOutBytes > 0) pvm_upkbyte(pszOut,nOutBytes,1);
+	if (nOutBytes > 0 && pszOut != NULL) pvm_upkbyte(pszOut,nOutBytes,1);
 	pvm_freebuf(bid);
 	if (pnOutBytes) *pnOutBytes = nOutBytes;
 	}
@@ -358,14 +440,16 @@ void mdlHandler(MDL mdl)
 		bid = pvm_recv(-1,MDL_TAG_REQ);
 		pvm_upkint(&idFrom,1,1);
 		pvm_upkint(&sid,1,1);
+		assert(sid < mdl->nMaxServices);
 		pvm_upkint(&nInBytes,1,1);
+		assert(nInBytes <= mdl->psrv[sid].nInBytes);
 		if (nInBytes > 0) pvm_upkbyte(mdl->pszIn,nInBytes,1);
 		pvm_freebuf(bid);
-
 		nOutBytes = 0;
-		(*mdl->pfcnService[sid])(mdl->pp1[sid],mdl->pszIn,nInBytes,
-								 mdl->pszOut,&nOutBytes);
-
+		assert(mdl->psrv[sid].fcnService != NULL);
+		(*mdl->psrv[sid].fcnService)(mdl->psrv[sid].p1,mdl->pszIn,nInBytes,
+									 mdl->pszOut,&nOutBytes);
+		assert(nOutBytes <= mdl->psrv[sid].nOutBytes);
 		tid = mdl->atid[idFrom];
 		pvm_initsend(PvmDataRaw);
 		pvm_pkint(&nOutBytes,1,1);
@@ -468,7 +552,7 @@ void AdjustDataSize(MDL mdl)
 	 ** Change buffer size?
 	 */
 	iMaxDataSize = 0;
-	for (i=0;i<MDL_MAX_CACHE_SPACES;++i) {
+	for (i=0;i<mdl->nMaxCacheIds;++i) {
 		if (mdl->cache[i].iType == MDL_NOCACHE) continue;
 		if (mdl->cache[i].iDataSize > iMaxDataSize) {
 			iMaxDataSize = mdl->cache[i].iDataSize;
@@ -477,6 +561,10 @@ void AdjustDataSize(MDL mdl)
 	if (iMaxDataSize != mdl->iMaxDataSize) {
 		/*
 		 ** Create new buffer with realloc?
+		 ** Be very careful when reallocing buffers in other libraries
+		 ** (not PVM) to be sure that the buffers are not in use!
+		 ** A pending non-blocking receive on a buffer which is realloced
+		 ** here will cause problems, make sure to take this into account!
 		 */
 		mdl->iMaxDataSize = iMaxDataSize;
 		}
@@ -488,9 +576,31 @@ void AdjustDataSize(MDL mdl)
  */
 void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 {
-	CACHE *c = &mdl->cache[cid];
-	int i,id;
+	CACHE *c;
+	int i,id,nMaxCacheIds;
 
+	/*
+	 ** Allocate more cache spaces if required!
+	 */
+	assert(cid >= 0);
+	if (cid >= mdl->nMaxCacheIds) {
+		/*
+		 ** reallocate cache spaces, adding space for 2 new cache spaces
+		 ** including the one just defined.
+		 */
+		nMaxCacheIds = cid + 3;
+		mdl->cache = realloc(mdl->cache,nMaxCacheIds*sizeof(CACHE));
+		assert(mdl->cache != NULL);
+		/*
+		 ** Initialize the new cache slots.
+		 */
+		for (i=mdl->nMaxCacheIds;i<nMaxCacheIds;++i) {
+			mdl->cache[i].iType = MDL_NOCACHE;
+			}
+		mdl->nMaxCacheIds = nMaxCacheIds;
+		}
+	c = &mdl->cache[cid];
+	assert(c->iType == MDL_NOCACHE);
 	c->iType = MDL_ROCACHE;
 	c->pData = pData;
 	c->iDataSize = iDataSize;
@@ -559,6 +669,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 		}
 	/*
 	 ** Keep on servicing until nCheckIn == nThreads!
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
 	while (c->nCheckIn < mdl->nThreads) {
 		mdlCacheReceive(mdl,NULL);
@@ -570,9 +681,31 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 				void (*init)(void *),void (*combine)(void *,void *))
 {
-	CACHE *c = &mdl->cache[cid];
-	int i,id;
+	CACHE *c;
+	int i,id,nMaxCacheIds;
 
+	/*
+	 ** Allocate more cache spaces if required!
+	 */
+	assert(cid >= 0);
+	if (cid >= mdl->nMaxCacheIds) {
+		/*
+		 ** reallocate cache spaces, adding space for 2 new cache spaces
+		 ** including the one just defined.
+		 */
+		nMaxCacheIds = cid + 3;
+		mdl->cache = realloc(mdl->cache,nMaxCacheIds*sizeof(CACHE));
+		assert(mdl->cache != NULL);
+		/*
+		 ** Initialize the new cache slots.
+		 */
+		for (i=mdl->nMaxCacheIds;i<nMaxCacheIds;++i) {
+			mdl->cache[i].iType = MDL_NOCACHE;
+			}
+		mdl->nMaxCacheIds = nMaxCacheIds;
+		}
+	c = &mdl->cache[cid];
+	assert(c->iType == MDL_NOCACHE);
 	c->iType = MDL_COCACHE;
 	c->pData = pData;
 	c->iDataSize = iDataSize;
@@ -641,6 +774,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		}
 	/*
 	 ** Keep on servicing until nCheckOut == nThreads!
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
 	while (c->nCheckIn < mdl->nThreads) {
 		mdlCacheReceive(mdl,NULL);
@@ -684,6 +818,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	++c->nCheckOut;
 	/*
 	 ** Keep on servicing until nCheckOut == nThreads!
+	 ** THIS IS A SYNCHRONIZE!!!
 	 */
 	while (c->nCheckOut < mdl->nThreads) {
 		mdlCacheReceive(mdl,NULL);
@@ -704,7 +839,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	CACHE *c = &mdl->cache[cid];
 	char *pLine;
 	int iElt,iLine,i;
-	int iVictim,iLineVic,idVic,*pi;
+	int iVictim,iLineVic,*pi;
 	char ach[80];
 
 	if (++c->nAccess == MDL_CHECK_INTERVAL) {
