@@ -14,7 +14,7 @@ mainmodule mdl {
   };
 
   array [1D] AMdl {
-    entry AMdl(int, char *);
+    entry AMdl(int bDiag, const std::string& progname);
     entry void AMdlInit(void *fcnChild);
     entry void swapInit(int, int);
     entry void swapSendMore();

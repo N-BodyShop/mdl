@@ -1,6 +1,8 @@
 #ifndef MDLIMPL_HINCLUDED
 #define MDLIMPL_HINCLUDED
 
+#include "pup_stl.h"
+
 #include "mdl.decl.h"
 
 CProxy_AMdl aId;
@@ -93,7 +95,9 @@ public:
     void done(void);
 };
 
-void mdlSetup(MDL *pmdl, int bDiag, char *);
+void mdlSetup(MDL *pmdl, int bDiag, const char *);
+
+PUPbytes(void *);
 
 // class AMdl : public ArrayElement1D
 class AMdl : public CBase_AMdl
@@ -123,7 +127,7 @@ public:
     int nFlush;
     
     MDL mdl;
-    AMdl(int bDiag, char *progname);
+    AMdl(int bDiag, const std::string& progname);
 
     void AMdlInit(void *fcnPtr);
     AMdl(CkMigrateMessage*) {}

@@ -1,8 +1,7 @@
 #
 #       Charm makefile for MDL
 #
-CHARMC=../../charm/bin/charmc
-CFLAGS=-g -Wall
+CHARMC = ../../charm/bin/charmc
 
 default: mdl.o
 

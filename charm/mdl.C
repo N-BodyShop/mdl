@@ -133,7 +133,7 @@ void mdlPrintTimer(MDL mdl,char *message, mdlTimer *t0)
 // For child threads pass it to fcnChild in the AMdl() constructor
 
 // here is the helper functoin
-void mdlSetup(MDL *pmdl, int bDiag, char *progname)
+void mdlSetup(MDL *pmdl, int bDiag, const char* progname)
 {
 	MDL mdl;
 	int i;
@@ -258,7 +258,7 @@ Main::Main(CkArgMsg* m)
 	
       nfinished = 0;
       MainId = thishandle;
-      aId = CProxy_AMdl::ckNew(bDiag, tmp, CkNumPes());
+      aId = CProxy_AMdl::ckNew(bDiag, std::string(tmp), CkNumPes());
       //aId = CProxy_AMdl::ckNew(bDiag, tmp, opts);
 	
 #if 0
@@ -291,11 +291,11 @@ Main::done(void)
 	  CkExit();
   };
 
-AMdl::AMdl(int bDiag, char *progname)
+AMdl::AMdl(int bDiag, const std::string& progname)
 {
     int i;
     
-	mdlSetup(&mdl, bDiag, progname);
+	mdlSetup(&mdl, bDiag, progname.c_str());
 
 	msgReply = (MdlMsg **) malloc(mdl->nThreads*sizeof(MdlMsg *));
 	for(i = 0; i < mdl->nThreads; i++)

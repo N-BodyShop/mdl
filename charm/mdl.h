@@ -1,8 +1,6 @@
 #ifndef MDL_HINCLUDED
 #define MDL_HINCLUDED
 
-#include <charm.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -104,29 +102,9 @@ typedef struct mdlContext {
 #define MDLTIMER
 
 
-#define printf CkPrintf
-
 void mdlprintf( MDL mdl, const char *format, ... );
 
 #ifdef MDLASSERT
-#ifdef __ANSI_CPP__
-#define mdlassert(mdl,expr) \
-    { \
-      if (!(expr)) { \
-             CkPrintf("%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, # expr ); \
-             assert( expr ); \
-             } \
-    }
-#else
-#define mdlassert(mdl,expr) \
-    { \
-      if (!(expr)) { \
-             CkPrintf("%s:%d Assertion `%s' failed.\n", __FILE__, __LINE__, "expr" ); \
-             assert( expr ); \
-             } \
-    }
-#endif
-#else
 #define mdlassert(mdl,expr)  assert(expr)
 #endif
 
