@@ -397,7 +397,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		/*
 		 ** Copy to a temp buffer to be safe.
 		 */
-		for (i=0;i<nOutMax;++i) mdl->pszTrans[i] = pszOut[i];
+		memcpy(mdl->pszTrans, pszOut, nOutMax);
 		MPI_Isend(mdl->pszTrans,nOutMax,MPI_CHAR,id,MDL_TAG_SWAP,
 			 MPI_COMM_WORLD, &request);
 		iTag = MDL_TAG_SWAP;
@@ -960,8 +960,7 @@ void mdlFinishCache(MDL mdl,int cid)
 				id = iKey & c->iIdMask;
 				caFlsh->iLine = iKey >> c->iInvKeyShift;
 				t = &c->pLine[i*c->iLineSize];
-				for(j = 0; j < c->iLineSize; ++j)
-				    pszFlsh[j] = t[j];
+				memcpy(pszFlsh, t, c->iLineSize);
 				MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
 					 MPI_CHAR, id, MDL_TAG_CACHECOM,
 					 MPI_COMM_WORLD, &reqFlsh); 
