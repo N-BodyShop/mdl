@@ -1206,7 +1206,6 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	int iElt,iLine,i,iKey,iKeyVic,nKeyNew;
 	int idVic;
 	int iVictim,*pi;
-	char ach[80];
 	CAHEAD *caFlsh;
 	char *pszFlsh;
 	MPI_Status status;
@@ -1287,9 +1286,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		/*
 		 ** Cache Failure!
 		 */
-		sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
-		mdlDiag(mdl,ach);
-		exit(1);
+		mdlprintf(mdl, "MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
+		assert(0);
 		}
 	iKeyVic = c->pTag[iVictim].iKey;
 	/*
