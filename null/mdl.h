@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#ifdef __osf__
+#if defined(__osf__) || defined(__sgi)
 #define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
 #endif
 
