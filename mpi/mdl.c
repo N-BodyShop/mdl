@@ -316,6 +316,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 ** Start bilateral transfers. Note: One processor is GUARANTEED to 
 	 ** complete all its transfers.
 	 */
+	assert(nBufBytes >= nOutBytes);
 	pszOut = &pszBuf[nBufBytes-nOutBytes];
 	pszIn = pszBuf;
 	while (nOutBytes && nInBytes) {
