@@ -3,15 +3,7 @@
 #include <stdio.h>
 #include <pthread.h>
 
-#define MDL_MAX_SERVICES		500
-#define MDL_MAX_SERVICE_BYTES	4096
-#define MDL_MAX_CACHE_SPACES	10
-#define MDL_TRANS_SIZE			8096
-
 #define SRV_STOP		0
-#define DATA(D,S)	((struct S *)(D))
-#define SIZE(S)		(sizeof(struct S))
-
 
 typedef struct mbxStruct {
     pthread_mutex_t mux;
@@ -20,7 +12,8 @@ typedef struct mbxStruct {
     int bRel;
     int sid;
     int nBytes;
-    __align128 char msgBuf[MDL_MAX_SERVICE_BYTES];
+    char *pszIn;
+    char *pszOut;
     } MBX;
 
 typedef struct swxStruct {
@@ -28,7 +21,7 @@ typedef struct swxStruct {
 	int bSet;
     int nInBytes;
 	int nOutBufBytes;
-	__align128 char achBuf[MDL_TRANS_SIZE];
+	char *pszBuf;
     } SWX;
 
 
@@ -60,6 +53,14 @@ typedef struct cacheSpace {
 	} CACHE;
 
 
+typedef struct serviceRec {
+	int nInBytes;
+	int nOutBytes;
+	void *p1;
+	void (*fcnService)(void *,void *,int,void *,int *);
+	} SERVICE;
+
+
 typedef struct mdlContext {
 	int nThreads;
 	int idSelf;
@@ -67,32 +68,40 @@ typedef struct mdlContext {
 	FILE *fpDiag;
 	pthread_t *pt;
 	struct mdlContext **pmdl;
-    MBX mbxOwn;
-	SWX swxOwn;
 	/*
 	 ** Services stuff!
 	 */
-	void *pp1[MDL_MAX_SERVICES];
-	void (*pfcnService[MDL_MAX_SERVICES])(void *,char *,int,char *,int *);
-	__align128 char msgBuf[MDL_MAX_SERVICE_BYTES];
+	int nMaxServices;
+	int nMaxInBytes;
+	int nMaxOutBytes;
+	SERVICE *psrv;
+    MBX mbxOwn;
+	/*
+	 ** Swapping Box.
+	 */
+	SWX swxOwn;
 	/*
 	 ** Caching stuff!
 	 */
 	pthread_barrier_t bar;	/* only thread 0 initializes this barrier */
 	unsigned long uRand;
-	CACHE cache[MDL_MAX_CACHE_SPACES];
+	int nMaxCacheIds;
+	int iMaxDataSize;
+	CACHE *cache;
 	} * MDL;
 
 
+double mdlCpuTimer(MDL);
 int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
 int mdlThreads(MDL);
 int mdlSelf(MDL);
-int mdlSwap(MDL,int,int,char *,int,int *,int *);
+int mdlSwap(MDL,int,int,void *,int,int *,int *);
 void mdlDiag(MDL,char *);
-void mdlAddService(MDL,int,void *,void (*)());
-void mdlReqService(MDL,int,int,char *,int);
-void mdlGetReply(MDL,int,char *,int *);
+void mdlAddService(MDL,int,void *,void (*)(void *,void *,int,void *,int *),
+				   int,int);
+void mdlReqService(MDL,int,int,void *,int);
+void mdlGetReply(MDL,int,void *,int *);
 void mdlHandler(MDL);
 /*
  ** Caching functions.
