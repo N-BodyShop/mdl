@@ -597,7 +597,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		/*
 		 ** Unpack the data into the 'sentinel-line' cache data.
 		 */
-		for (i=0;i<c->iLineSize;++i) c->pLine[i] = pszRcv[i];
+		iLineSize = c->iLineSize;
+		for (i=0;i<iLineSize;++i) c->pLine[i] = pszRcv[i];
 		i = ph->iLine*MDL_CACHELINE_ELTS;
 		t = &c->pData[i*c->iDataSize];
 		/*
@@ -619,7 +620,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		 ** request.
 		 */
 		assert(pLine != NULL);
-		for (i=0;i<c->iLineSize;++i) pLine[i] = pszRcv[i];
+		iLineSize = c->iLineSize;
+		for (i=0;i<iLineSize;++i) pLine[i] = pszRcv[i];
 		if (c->iType == MDL_COCACHE) {
 			/*
 			 ** Call the initializer function for all elements in 
