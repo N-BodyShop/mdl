@@ -10,7 +10,7 @@ mainmodule mdl {
 
   mainchare Main {
     entry Main(CkArgMsg *m);
-    entry [threaded] void startMain(CkArgMsg *m);
+    entry [threaded] void startMain();
 //    entry void startMain(CkArgMsg *m);
     entry void done(void);
   };

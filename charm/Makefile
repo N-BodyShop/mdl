@@ -1,7 +1,7 @@
 #
 #       Charm makefile for MDL
 #
-CHARMC = ../../charm/bin/charmc
+CHARMC = $(CC)
 
 default: mdl.o
 

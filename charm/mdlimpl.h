@@ -94,7 +94,7 @@ class Main : public Chare
     
 public:
     Main(CkArgMsg* m);
-    void startMain(CkArgMsg* m);
+    void startMain();
     void done(void);
 };
 

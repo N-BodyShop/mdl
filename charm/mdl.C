@@ -308,17 +308,17 @@ Main::Main(CkArgMsg* m)
 	liveVisInit(cfg, aId, drawing_callback);
 #endif
 
-      MainId.startMain(m);
+      delete m;
+      MainId.startMain();
     };
 
 void
-Main::startMain(CkArgMsg* m)
+Main::startMain()
 {
-      // Repack command-line arguments
-      int argc = m->argc;
-      char **argv = m->argv;
+      // get command-line arguments
+      int argc = CkGetArgc();
+      char **argv = CkGetArgv();
 
-      delete m;
 
       MPI_Main(argc, argv);
 };
