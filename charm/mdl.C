@@ -1140,37 +1140,24 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
     }
 
 void
-AMdl::barrierRel()
+AMdl::barrierEnter(CkReductionMsg *msg)
 {
-    assert(threadBarrier != 0);
-    
-    CthAwaken(threadBarrier);
-    threadBarrier = 0;
-    }
-     
-void
-AMdl::barrierEnter()
-{
-    CProxy_AMdl proxyAMdl(aId);
-    int i;
 
-	nInBar++;
-	if(nInBar == mdl->nThreads) {
-	    nInBar = 0;
-	    for(i = 0; i < mdl->nThreads; i++)
-		proxyAMdl[i].barrierRel();
-	    }
+    delete msg;
+    
+    cbBarrier->send();
     }
 
 void
 AMdl::barrier()
 {
-    CProxy_AMdl proxyAMdl(aId);
-    
-    threadBarrier = CthSelf();
-    proxyAMdl[0].barrierEnter();
-    if(threadBarrier)
-	CthSuspend();
+    // Use a null reduction as a barrier.
+
+    cbBarrier = new CkCallback(CkCallback::resumeThread);
+    CkCallback cb(CkIndex_AMdl::barrierEnter(NULL), thisProxy);
+    contribute(0, 0,  CkReduction::concat, cb);
+    cbBarrier->thread_delay();
+    delete cbBarrier;
 }
 
 void
@@ -1364,7 +1351,7 @@ void mdlFinishCache(MDL mdl,int cid)
 extern "C"
 void mdlCacheCheck(MDL mdl)
 {
-    int dummy = CmiDeliverMsgs(0);
+    //    int dummy = CmiDeliverMsgs(0);
     // CthYield();
     
     }

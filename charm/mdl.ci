@@ -40,8 +40,7 @@ mainmodule mdl {
     entry void unblockCache(MdlCacheMsg *);
     entry void CacheFlush(MdlCacheMsg *mesg);
     entry void CacheFlushAll(MdlCacheFlshMsg *mesg);
-    entry void barrierEnter();
-    entry void barrierRel();
+    entry void barrierEnter(CkReductionMsg *);
     entry void waitflushAwaken();
   };
 };

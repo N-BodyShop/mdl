@@ -199,12 +199,12 @@ public:
 	int done;
 	} swapData;
     CthThreadStruct * threadSrvWait;
-    CthThreadStruct * threadBarrier;
     CACHE *cache;		/* pointer to nodegroup cache */
     CmiNodeLock *lock;		/* pointer to nodegroup lock */
     CkCallback * cbSwap;
     CkCallback ** cbService;
     CkCallback * cbCache;
+    CkCallback * cbBarrier;
     int idReplyWait;
     int nInBar;
     int nFlush;
@@ -228,9 +228,9 @@ public:
     void unblockCache(MdlCacheMsg *);
     void CacheFlush(MdlCacheMsg *mesg);
     void CacheFlushAll(MdlCacheFlshMsg *mesg);
-    void barrier();
-    void barrierEnter();
     void barrierRel();
+    void barrierEnter(CkReductionMsg *);
+    void barrier();
     void waitflush();
     void waitflushAwaken();
     inline int indexRank(int index) 
