@@ -192,6 +192,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 			bid = pvm_recv(-1,MDL_TAG_INIT);
 			pvm_upkint(mdl->atid,mdl->nThreads,1);
 			pvm_upkint(&iLen,1,1);
+			assert(iLen >= 1);
 			pvm_upkbyte(name,iLen,1);
 			pvm_freebuf(bid);
 			/* for (mdl->idSelf=1;mdl->idSelf<mdl->nThreads;++mdl->idSelf) {
@@ -288,6 +289,7 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	int tid,bid,nInBytes,nOutBufBytes,nInMax,nOutMax;
 	char *pszBuf = vBuf;
 	char *pszIn,*pszOut;
+	int cc;
 
 	tid = mdl->atid[id];
 	*pnRcvBytes = 0;
@@ -295,17 +297,27 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	/*
 	 **	Send number of rejects to target thread amount of free space
 	 */ 
-	pvm_initsend(PvmDataRaw);
-	pvm_pkint(&nOutBytes,1,1);
-	pvm_pkint(&nBufBytes,1,1);
-	pvm_send(tid,MDL_TAG_SWAPINIT);
+	cc = pvm_initsend(PvmDataRaw);
+	assert(cc >= 0);
+	cc = pvm_pkint(&nOutBytes,1,1);
+	assert(cc >= 0);
+	cc = pvm_pkint(&nBufBytes,1,1);
+	assert(cc >= 0);
+	cc = pvm_send(tid,MDL_TAG_SWAPINIT);
+	assert(cc >= 0);
 	/*
 	 ** Receive the number of target thread rejects and target free space
 	 */
 	bid = pvm_recv(tid,MDL_TAG_SWAPINIT);
-	pvm_upkint(&nInBytes,1,1);
-	pvm_upkint(&nOutBufBytes,1,1);
-	pvm_freebuf(bid);
+	assert(bid >= 0);
+	cc = pvm_upkint(&nInBytes,1,1);
+	assert(cc >= 0);
+	assert(nInBytes >= 0);
+	cc = pvm_upkint(&nOutBufBytes,1,1);
+	assert(cc >= 0);
+	assert(nOutBufBytes >= 0);
+	cc = pvm_freebuf(bid);
+	assert(cc >= 0);
 	/*
 	 ** Start bilateral transfers. Note: One processor is GUARANTEED to 
 	 ** complete all its transfers.
@@ -321,12 +333,18 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
 		nInMax = (nInBytes < PVM_TRANS_SIZE)?nInBytes:PVM_TRANS_SIZE;
 		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
-		pvm_initsend(PvmDataRaw);
-		pvm_pkbyte(pszOut,nOutMax,1);
-		pvm_send(tid,MDL_TAG_SWAP);
+		cc = pvm_initsend(PvmDataRaw);
+		assert(cc >= 0);
+		cc = pvm_pkbyte(pszOut,nOutMax,1);
+		assert(cc >= 0);
+		cc = pvm_send(tid,MDL_TAG_SWAP);
+		assert(cc >= 0);
 		bid = pvm_recv(tid,MDL_TAG_SWAP);
-		pvm_upkbyte(pszIn,nInMax,1);
-		pvm_freebuf(bid);
+		assert(bid >= 0);
+		cc = pvm_upkbyte(pszIn,nInMax,1);
+		assert(cc >= 0);
+		cc = pvm_freebuf(bid);
+		assert(cc >= 0);
 		/*
 		 ** Adjust pointers and counts for next itteration.
 		 */
@@ -346,9 +364,12 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	while (nOutBytes && nOutBufBytes) {
 		nOutMax = (nOutBytes < PVM_TRANS_SIZE)?nOutBytes:PVM_TRANS_SIZE;
 		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
-		pvm_initsend(PvmDataRaw);
-		pvm_pkbyte(pszOut,nOutMax,1);
-		pvm_send(tid,MDL_TAG_SWAP);
+		cc = pvm_initsend(PvmDataRaw);
+		assert(cc >= 0);
+		cc = pvm_pkbyte(pszOut,nOutMax,1);
+		assert(cc >= 0);
+		cc = pvm_send(tid,MDL_TAG_SWAP);
+		assert(cc >= 0);
 		pszOut = &pszOut[nOutMax];
 		nOutBytes -= nOutMax;
 		nOutBufBytes -= nOutMax;
@@ -358,8 +379,11 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		nInMax = (nInBytes < PVM_TRANS_SIZE)?nInBytes:PVM_TRANS_SIZE;
 		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
 		bid = pvm_recv(tid,MDL_TAG_SWAP);
-		pvm_upkbyte(pszIn,nInMax,1);
-		pvm_freebuf(bid);
+		assert(bid >= 0);
+		cc = pvm_upkbyte(pszIn,nInMax,1);
+		assert(cc >= 0);
+		cc = pvm_freebuf(bid);
+		assert(cc >= 0);
 		pszIn = &pszIn[nInMax];
 		nInBytes -= nInMax;
 		nBufBytes -= nInMax;
@@ -411,10 +435,12 @@ void mdlAddService(MDL mdl,int sid,void *p1,
 	 */
 	if (nInBytes > mdl->nMaxInBytes) {
 		mdl->pszIn = realloc(mdl->pszIn,nInBytes);
+		assert(mdl->pszIn != NULL);
 		mdl->nMaxInBytes = nInBytes;
 		}
 	if (nOutBytes > mdl->nMaxOutBytes) {
 		mdl->pszOut = realloc(mdl->pszOut,nOutBytes);
+		assert(mdl->pszIn != NULL);
 		mdl->nMaxOutBytes = nOutBytes;
 		}
 	mdl->psrv[sid].p1 = p1;
@@ -428,15 +454,23 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 {
 	char *pszIn = vin;
 	int tid;
+	int cc;
 
 	tid = mdl->atid[id];
-	pvm_initsend(PvmDataRaw);
-	pvm_pkint(&mdl->idSelf,1,1);
-	pvm_pkint(&sid,1,1);
+	cc = pvm_initsend(PvmDataRaw);
+	assert(cc >= 0);
+	cc = pvm_pkint(&mdl->idSelf,1,1);
+	assert(cc >= 0);
+	cc = pvm_pkint(&sid,1,1);
+	assert(cc >= 0);
 	if (!pszIn) nInBytes = 0;
-	pvm_pkint(&nInBytes,1,1);
-	if (nInBytes > 0) pvm_pkbyte(pszIn,nInBytes,1);
-	pvm_send(tid,MDL_TAG_REQ);
+	assert(nInBytes <= mdl->psrv[sid].nInBytes);
+	cc = pvm_pkint(&nInBytes,1,1);
+	assert(cc >= 0);
+	if (nInBytes > 0) cc = pvm_pkbyte(pszIn,nInBytes,1);
+	assert(cc >= 0);
+	cc = pvm_send(tid,MDL_TAG_REQ);
+	assert(cc >= 0);
 	}
 
 
@@ -444,12 +478,18 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 {
 	char *pszOut = vout;
 	int tid,bid,nOutBytes;
+	int cc;
 
 	tid = mdl->atid[id];
 	bid = pvm_recv(tid,MDL_TAG_RPL);
-	pvm_upkint(&nOutBytes,1,1);
-	if (nOutBytes > 0 && pszOut != NULL) pvm_upkbyte(pszOut,nOutBytes,1);
-	pvm_freebuf(bid);
+	assert(bid >= 0);
+	cc = pvm_upkint(&nOutBytes,1,1);
+	assert(cc >= 0);
+	assert(nOutBytes >= 0);
+	if (nOutBytes > 0 && pszOut != NULL) cc = pvm_upkbyte(pszOut,nOutBytes,1);
+	assert(cc >= 0);
+	cc = pvm_freebuf(bid);
+	assert(cc >= 0);
 	if (pnOutBytes) *pnOutBytes = nOutBytes;
 	}
 
@@ -458,27 +498,43 @@ void mdlHandler(MDL mdl)
 {
 	int bid,tid;
 	int nInBytes,nOutBytes,sid,idFrom;
+	int cc;
 
 	sid = 1;
 	while (sid != SRV_STOP) {
 		bid = pvm_recv(-1,MDL_TAG_REQ);
-		pvm_upkint(&idFrom,1,1);
-		pvm_upkint(&sid,1,1);
+		assert(bid >= 0);
+		cc = pvm_upkint(&idFrom,1,1);
+		assert(cc >= 0);
+		assert(idFrom >= 0);
+		assert(idFrom < mdl->nThreads);
+		assert(idFrom != mdl->idSelf);
+		cc = pvm_upkint(&sid,1,1);
+		assert(cc >= 0);
 		assert(sid < mdl->nMaxServices);
-		pvm_upkint(&nInBytes,1,1);
+		assert(sid >= 0);
+		cc = pvm_upkint(&nInBytes,1,1);
+		assert(cc >= 0);
 		assert(nInBytes <= mdl->psrv[sid].nInBytes);
-		if (nInBytes > 0) pvm_upkbyte(mdl->pszIn,nInBytes,1);
-		pvm_freebuf(bid);
+		assert(nInBytes >= 0);
+		if (nInBytes > 0) cc = pvm_upkbyte(mdl->pszIn,nInBytes,1);
+		assert(cc >= 0);
+		cc = pvm_freebuf(bid);
+		assert(cc >= 0);
 		nOutBytes = 0;
 		assert(mdl->psrv[sid].fcnService != NULL);
 		(*mdl->psrv[sid].fcnService)(mdl->psrv[sid].p1,mdl->pszIn,nInBytes,
 									 mdl->pszOut,&nOutBytes);
 		assert(nOutBytes <= mdl->psrv[sid].nOutBytes);
 		tid = mdl->atid[idFrom];
-		pvm_initsend(PvmDataRaw);
-		pvm_pkint(&nOutBytes,1,1);
-		if (nOutBytes > 0) pvm_pkbyte(mdl->pszOut,nOutBytes,1);
-		pvm_send(tid,MDL_TAG_RPL);
+		cc = pvm_initsend(PvmDataRaw);
+		assert(cc >= 0);
+		cc = pvm_pkint(&nOutBytes,1,1);
+		assert(cc >= 0);
+		if (nOutBytes > 0) cc = pvm_pkbyte(mdl->pszOut,nOutBytes,1);
+		assert(cc >= 0);
+		cc = pvm_send(tid,MDL_TAG_RPL);
+		assert(cc >= 0);
 		}
 	}
 
