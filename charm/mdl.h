@@ -112,6 +112,7 @@ void mdlHandler(MDL);
  */
 void *mdlMalloc(MDL,size_t);
 void mdlFree(MDL,void *);
+void *mdlRealloc(MDL mdl,void *p, size_t iSize);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
@@ -130,6 +131,9 @@ double mdlMissRatio(MDL,int);
 double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
 
+#ifdef CHARM_MIGRATE
+void	mdlPstRegister(MDL mdl, void *pst);
+#endif
 #ifdef __cplusplus
 }
 #endif

@@ -5,10 +5,6 @@
 
 #include "mdl.decl.h"
 
-CProxy_AMdl aId;
-CProxy_Main MainId;
-CProxy_grpCache CacheId;
-
 #define MDL_CACHE_SIZE		16000000
 #define MDL_CACHELINE_BITS	4
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
@@ -241,6 +237,10 @@ public:
 		}
 	    return -1;
 	    }
+#ifdef CHARM_MIGRATE
+    void *pst;  // pointer to pst data to be pupped
+    void pup(PUP::er& p);
+#endif
 };
 
 #endif

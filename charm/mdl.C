@@ -14,6 +14,10 @@
 #include "mdl.h"
 #include "mdlimpl.h"
 
+CProxy_AMdl aId;
+CProxy_Main MainId;
+CProxy_grpCache CacheId;
+
 #define MDL_NOCACHE			0
 #define MDL_ROCACHE			1
 #define MDL_COCACHE			2
@@ -1010,6 +1014,12 @@ void mdlFree(MDL mdl,void *p)
 	free(p);
 	}
 
+extern "C"
+void *mdlRealloc(MDL mdl,void *p, size_t iSize)
+{	
+	return(realloc(p, iSize));
+	}
+
 /*
  ** Common initialization for all types of caches.
  */
@@ -1080,7 +1090,7 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 	/*
 	 ** Determine the number of cache lines to be allocated.
 	 */
-	c->nLines = (nElem*MDL_CACHE_SIZE/c->iDataSize)
+	c->nLines = (MDL_CACHE_SIZE/c->iDataSize)
 	    >> MDL_CACHELINE_BITS;
 	c->iLine = 1;
 	c->nTrans = 1;
