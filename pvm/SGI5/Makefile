@@ -19,7 +19,7 @@ SDIR	=	..
 BDIR	=	$(HOME)/pvm3/bin
 XDIR	=	$(BDIR)/$(PVM_ARCH)
 
-CFLAGS	=	-32 -O2 -fullwarn -I$(PVMDIR)/include
+CFLAGS	=	-32 -O2 -I$(PVMDIR)/include
 LIBS	=	$(PVMLIB) $(ARCHLIB) -lm
 
 default:	mdl.o
