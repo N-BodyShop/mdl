@@ -619,6 +619,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	char achDiag[256];
 #endif
 
+	ret = MPI_Wait(&mdl->ReqRcv, &status);
+	assert(ret == MPI_SUCCESS);
 #if 0
 	sprintf(achDiag, "%d: cache %d, message %d, from %d, rec top\n",
 		mdl->idSelf, ph->cid, ph->mid, ph->id);
@@ -654,7 +656,6 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		else
 			iLineSize = c->iLineSize;
 		for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
-#if (0)
 		if(mdl->pmidRpl[ph->id] != -1) {
 			MPI_Wait(&mdl->pReqRpl[ph->id], &status);
 		        }
@@ -662,11 +663,6 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		MPI_Isend(phRpl,sizeof(CAHEAD)+iLineSize,MPI_BYTE,
 			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD,
 			  &mdl->pReqRpl[ph->id]); 
-#else
-		mdl->pmidRpl[ph->id] = 0;
-		MPI_Send(phRpl,sizeof(CAHEAD)+iLineSize,MPI_BYTE,
-			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD ); 
-#endif
 		ret = 0;
 		break;
 	case MDL_MID_CACHEFLSH:
@@ -944,8 +940,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	int id;
 	CAHEAD caIn;
 	char achDiag[256];
-	MPI_Status status;
-	int ret;
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_ROCACHE;
@@ -965,8 +959,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	if(mdl->idSelf == 0) {
 	    c->nCheckIn = 1;
 	    while(c->nCheckIn < mdl->nThreads) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl, NULL);
 	    }
 	}
@@ -990,8 +982,6 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	else {
 	    c->nCheckIn = 0;
 	    while (c->nCheckIn == 0) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl,NULL);
 		}	
 	    }	
@@ -1010,8 +1000,6 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	CACHE *c;
 	int id;
 	CAHEAD caIn;
-	MPI_Status status;
-	int ret;
 
 	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
 	c->iType = MDL_COCACHE;
@@ -1028,8 +1016,6 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	if(mdl->idSelf == 0) {
 	    c->nCheckIn = 1;
 	    while(c->nCheckIn < mdl->nThreads) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl, NULL);
 		}
 	    }
@@ -1051,8 +1037,6 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	else {
 	    c->nCheckIn = 0;
 	    while (c->nCheckIn == 0) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl,NULL);
 		}	
 	    }	
@@ -1074,7 +1058,6 @@ void mdlFinishCache(MDL mdl,int cid)
 	MPI_Request reqFlsh;
 	MPI_Request reqBoth[2];
 	int index;
-	int ret;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
@@ -1092,8 +1075,6 @@ void mdlFinishCache(MDL mdl,int cid)
 		    }
 		++c->nCheckOut;
 		while(c->nCheckOut < mdl->nThreads) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl, NULL);
 		}
 		c->nCheckOut = 0;
@@ -1137,8 +1118,6 @@ void mdlFinishCache(MDL mdl,int cid)
 				    if(index == 1) /* Flush has completed */
 					break;
 				    else if(index == 0) {
-					  ret = MPI_Wait(&mdl->ReqRcv, &status);
-					  assert(ret == MPI_SUCCESS);
 					  mdlCacheReceive(mdl, NULL);
 					  reqBoth[0] = mdl->ReqRcv;
 					}
@@ -1157,8 +1136,6 @@ void mdlFinishCache(MDL mdl,int cid)
 	if(mdl->idSelf == 0) {
 	    ++c->nCheckOut;
 	    while(c->nCheckOut < mdl->nThreads) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl, NULL);
 		}
 	    }
@@ -1175,8 +1152,6 @@ void mdlFinishCache(MDL mdl,int cid)
 	else {
 	    c->nCheckOut = 0;
 	    while (c->nCheckOut == 0) {
-		  ret = MPI_Wait(&mdl->ReqRcv, &status);
-		  assert(ret == MPI_SUCCESS);
 		  mdlCacheReceive(mdl,NULL);
 		}	
 	    }	
@@ -1331,9 +1306,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 		/*
 		 ** Cache Failure!
 		 */
-		sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
-		mdlDiag(mdl,ach);
-		exit(1);
+		mdlprintf(mdl, "MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
+		assert(0);
 		}
 GotVictim:
 	iKeyVic = c->pTag[iVictim].iKey;
@@ -1397,9 +1371,6 @@ GotVictim:
 	 ** data requested from processor 'id'.
 	 */
 	while (1) {
-	  ret = MPI_Wait(&mdl->ReqRcv, &status);
-	  assert(ret == MPI_SUCCESS);
-	  
 	  if(mdlCacheReceive(mdl,pLine)) {
 		      if(caFlsh)
 			    MPI_Wait(&reqFlsh, &status);
