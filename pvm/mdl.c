@@ -7,6 +7,7 @@
 #include <string.h>
 #include <malloc.h>
 #include <math.h>
+#include <limits.h>
 #include <assert.h>
 #include <sys/time.h>
 #include <sys/resource.h>
