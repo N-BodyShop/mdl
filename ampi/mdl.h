@@ -29,6 +29,8 @@ typedef struct cacheHeader {
 	int mid;
 	int id;
 	int iLine;
+    int iSerial;
+    int iDummy;
 	} CAHEAD;
 
 
@@ -62,6 +64,8 @@ typedef struct cacheSpace {
 	long nMin;
 	int nKeyMax;
 	char *pbKey;
+    int iSerial;
+    int *iSerialLast;
 	} CACHE;
 
 typedef struct serviceRec {
@@ -100,8 +104,8 @@ typedef struct mdlContext {
 	int iCaBufSize;
 	char *pszRcv;
 	int *pmidRpl;
-	AMPI_Request *pReqRpl;
-	AMPI_Request ReqRcv;
+	MPI_Request *pReqRpl;
+	MPI_Request ReqRcv;
 	char **ppszRpl;
 	char *pszFlsh;
 	int nMaxCacheIds;

@@ -201,7 +201,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 
 	for(argc = 0; argv[argc]; argc++);
 
-	AMPI_Init(&argc, &argv);
+	MPI_Init(&argc, &argv);
 
 	/*
 	 ** Do some low level argument parsing for number of threads, and
@@ -230,8 +230,8 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 		fflush(stderr);
 		}
 
-	AMPI_Comm_size(AMPI_COMM_WORLD, &mdl->nThreads);
-	AMPI_Comm_rank(AMPI_COMM_WORLD, &mdl->idSelf);
+	MPI_Comm_size(MPI_COMM_WORLD, &mdl->nThreads);
+	MPI_Comm_rank(MPI_COMM_WORLD, &mdl->idSelf);
 	/*
 	 ** Allocate caching buffers, with initial data size of 0.
 	 ** We need one reply buffer for each thread, to deadlock situations.
@@ -246,7 +246,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	assert(mdl->pmidRpl != NULL);
 	for (i=0;i<mdl->nThreads;++i)
 		mdl->pmidRpl[i] = -1;
-	mdl->pReqRpl = malloc(mdl->nThreads*sizeof(AMPI_Request));
+	mdl->pReqRpl = malloc(mdl->nThreads*sizeof(MPI_Request));
 	assert(mdl->pReqRpl != NULL);
 	for (i=0;i<mdl->nThreads;++i) {
 		mdl->ppszRpl[i] = malloc(mdl->iCaBufSize);
@@ -280,8 +280,8 @@ void mdlFinish(MDL mdl)
 {
   int i;
 
-	AMPI_Barrier(AMPI_COMM_WORLD);
-        AMPI_Finalize();
+	MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Finalize();
 	/*
 	 ** Close Diagnostic file.
 	 */
@@ -355,8 +355,8 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		int nOutBytes;
 		int nBufBytes;
 		} swi,swo;
-	AMPI_Status status;
-	AMPI_Request request;
+	MPI_Status status;
+	MPI_Request request;
 
 	*pnRcvBytes = 0;
 	*pnSndBytes = 0;
@@ -365,17 +365,17 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	 */ 
 	swi.nOutBytes = nOutBytes;
 	swi.nBufBytes = nBufBytes;
-	AMPI_Isend(&swi,sizeof(swi),AMPI_BYTE,id,MDL_TAG_SWAPINIT,
-		  AMPI_COMM_WORLD, &request);
+	MPI_Isend(&swi,sizeof(swi),MPI_BYTE,id,MDL_TAG_SWAPINIT,
+		  MPI_COMM_WORLD, &request);
 	/*
 	 ** Receive the number of target thread rejects and target free space
 	 */
 	iTag = MDL_TAG_SWAPINIT;
 	pid = id;
-	AMPI_Recv(&swo,sizeof(swo),AMPI_BYTE,pid,iTag,AMPI_COMM_WORLD, &status);
-	AMPI_Get_count(&status, AMPI_BYTE, &nBytes);
+	MPI_Recv(&swo,sizeof(swo),MPI_BYTE,pid,iTag,MPI_COMM_WORLD, &status);
+	MPI_Get_count(&status, MPI_BYTE, &nBytes);
 	assert(nBytes == sizeof(swo));
-	AMPI_Wait(&request, &status);
+	MPI_Wait(&request, &status);
 	nInBytes = swo.nOutBytes;
 	nOutBufBytes = swo.nBufBytes;
 	/*
@@ -398,15 +398,15 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		 ** Copy to a temp buffer to be safe.
 		 */
 		for (i=0;i<nOutMax;++i) mdl->pszTrans[i] = pszOut[i];
-		AMPI_Isend(mdl->pszTrans,nOutMax,AMPI_BYTE,id,MDL_TAG_SWAP,
-			 AMPI_COMM_WORLD, &request);
+		MPI_Isend(mdl->pszTrans,nOutMax,MPI_BYTE,id,MDL_TAG_SWAP,
+			 MPI_COMM_WORLD, &request);
 		iTag = MDL_TAG_SWAP;
 		pid = id;
-		AMPI_Recv(pszIn,nInMax,AMPI_BYTE,pid,iTag,AMPI_COMM_WORLD,
+		MPI_Recv(pszIn,nInMax,MPI_BYTE,pid,iTag,MPI_COMM_WORLD,
 			 &status);
-		AMPI_Get_count(&status, AMPI_BYTE, &nBytes);
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == nInMax);
-		AMPI_Wait(&request, &status);
+		MPI_Wait(&request, &status);
 		/*
 		 ** Adjust pointers and counts for next itteration.
 		 */
@@ -428,8 +428,8 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 	while (nOutBytes && nOutBufBytes) {
 		nOutMax = (nOutBytes < MDL_TRANS_SIZE)?nOutBytes:MDL_TRANS_SIZE;
 		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
-		AMPI_Send(pszOut,nOutMax,AMPI_BYTE,id,MDL_TAG_SWAP,
-			 AMPI_COMM_WORLD);
+		MPI_Send(pszOut,nOutMax,MPI_BYTE,id,MDL_TAG_SWAP,
+			 MPI_COMM_WORLD);
 		pszOut = &pszOut[nOutMax];
 		nOutBytes -= nOutMax;
 		nOutBufBytes -= nOutMax;
@@ -439,9 +439,9 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 		nInMax = (nInBytes < MDL_TRANS_SIZE)?nInBytes:MDL_TRANS_SIZE;
 		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
 		iTag = MDL_TAG_SWAP;
-		AMPI_Recv(pszIn,nInMax,AMPI_BYTE,id,iTag,AMPI_COMM_WORLD,
+		MPI_Recv(pszIn,nInMax,MPI_BYTE,id,iTag,MPI_COMM_WORLD,
 			 &status);
-		AMPI_Get_count(&status, AMPI_BYTE, &nBytes);
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == nInMax);
 		pszIn = &pszIn[nInMax];
 		nInBytes -= nInMax;
@@ -525,8 +525,8 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 	if (nInBytes > 0 && pszIn != NULL) {
 		for (i=0;i<nInBytes;++i) pszOut[i] = pszIn[i];
 		}
-	AMPI_Send(mdl->pszBuf,nInBytes+sizeof(SRVHEAD),AMPI_BYTE,id,MDL_TAG_REQ,
-		 AMPI_COMM_WORLD);
+	MPI_Send(mdl->pszBuf,nInBytes+sizeof(SRVHEAD),MPI_BYTE,id,MDL_TAG_REQ,
+		 MPI_COMM_WORLD);
 	}
 
 
@@ -536,12 +536,12 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 	SRVHEAD *ph = (SRVHEAD *)mdl->pszBuf;
 	char *pszIn = &mdl->pszBuf[sizeof(SRVHEAD)];
 	int i,iTag,nBytes;
-	AMPI_Status status;
+	MPI_Status status;
 
 	iTag = MDL_TAG_RPL;
-	AMPI_Recv(mdl->pszBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),AMPI_BYTE,
-					id,iTag,AMPI_COMM_WORLD, &status);
-	AMPI_Get_count(&status, AMPI_BYTE, &nBytes);
+	MPI_Recv(mdl->pszBuf,mdl->nMaxSrvBytes+sizeof(SRVHEAD),MPI_BYTE,
+					id,iTag,MPI_COMM_WORLD, &status);
+	MPI_Get_count(&status, MPI_BYTE, &nBytes);
 	assert(nBytes == ph->nOutBytes + sizeof(SRVHEAD));
 	if (ph->nOutBytes > 0 && pszOut != NULL) {
 		for (i=0;i<ph->nOutBytes;++i) pszOut[i] = pszIn[i];
@@ -557,19 +557,19 @@ void mdlHandler(MDL mdl)
 	char *pszIn = &mdl->pszIn[sizeof(SRVHEAD)];
 	char *pszOut = &mdl->pszOut[sizeof(SRVHEAD)];
 	int sid,iTag,id,nOutBytes,nBytes;
-	AMPI_Status status;
+	MPI_Status status;
 
 	sid = 1;
 	while (sid != SRV_STOP) {
 		iTag = MDL_TAG_REQ;
-		id = AMPI_ANY_SOURCE;
-		AMPI_Recv(mdl->pszIn,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
-			       AMPI_BYTE, id,iTag,AMPI_COMM_WORLD,&status);
+		id = MPI_ANY_SOURCE;
+		MPI_Recv(mdl->pszIn,mdl->nMaxSrvBytes+sizeof(SRVHEAD),
+			       MPI_BYTE, id,iTag,MPI_COMM_WORLD,&status);
 		/*
 		 ** Quite a few sanity checks follow.
 		 */
-		id = status.AMPI_SOURCE;
-		AMPI_Get_count(&status, AMPI_BYTE, &nBytes);
+		id = status.MPI_SOURCE;
+		MPI_Get_count(&status, MPI_BYTE, &nBytes);
 		assert(nBytes == phi->nInBytes + sizeof(SRVHEAD));
 		assert(id == phi->idFrom);
 		sid = phi->sid;
@@ -584,8 +584,8 @@ void mdlHandler(MDL mdl)
 		pho->sid = sid;
 		pho->nInBytes = phi->nInBytes;
 		pho->nOutBytes = nOutBytes;
-		AMPI_Send(mdl->pszOut,nOutBytes+sizeof(SRVHEAD),
-			 AMPI_BYTE, id,MDL_TAG_RPL, AMPI_COMM_WORLD);
+		MPI_Send(mdl->pszOut,nOutBytes+sizeof(SRVHEAD),
+			 MPI_BYTE, id,MDL_TAG_RPL, MPI_COMM_WORLD);
 		}
 	}
 
@@ -610,7 +610,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	char *t;
 	int id, iTag;
 	int n,i;
-	AMPI_Status status;
+	MPI_Status status;
 	int ret;
 	int iLineSize;
 	int iDataSize;
@@ -618,8 +618,8 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	char achDiag[256];
 #endif
 
-	ret = AMPI_Wait(&mdl->ReqRcv, &status);
-	assert(ret == AMPI_SUCCESS);
+	ret = MPI_Wait(&mdl->ReqRcv, &status);
+	assert(ret == MPI_SUCCESS);
 #if 0
 	sprintf(achDiag, "%d: cache %d, message %d, from %d, rec top\n",
 		mdl->idSelf, ph->cid, ph->mid, ph->id);
@@ -628,6 +628,9 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 
 	c = &mdl->cache[ph->cid];
 	assert(c->iType != MDL_NOCACHE);
+	
+	assert(ph->iSerial > c->iSerialLast[ph->id]);
+	c->iSerialLast[ph->id] = ph->iSerial;
 	
 	switch (ph->mid) {
 	case MDL_MID_CACHEIN:
@@ -656,11 +659,12 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 			iLineSize = c->iLineSize;
 		for (i=0;i<iLineSize;++i) pszRpl[i] = t[i];
 		if(mdl->pmidRpl[ph->id] != -1) {
-			AMPI_Wait(&mdl->pReqRpl[ph->id], &status);
+			MPI_Wait(&mdl->pReqRpl[ph->id], &status);
 		        }
 		mdl->pmidRpl[ph->id] = 0;
-		AMPI_Isend(phRpl,sizeof(CAHEAD)+iLineSize,AMPI_BYTE,
-			 ph->id, MDL_TAG_CACHECOM, AMPI_COMM_WORLD,
+		phRpl->iSerial = c->iSerial++;
+		MPI_Isend(phRpl,sizeof(CAHEAD)+iLineSize,MPI_BYTE,
+			 ph->id, MDL_TAG_CACHECOM, MPI_COMM_WORLD,
 			  &mdl->pReqRpl[ph->id]); 
 		ret = 0;
 		break;
@@ -719,10 +723,10 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	/*
 	 * Fire up next receive
 	 */
-	id = AMPI_ANY_SOURCE;
+	id = MPI_ANY_SOURCE;
 	iTag = MDL_TAG_CACHECOM;
-	AMPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, AMPI_BYTE, id,
-		 iTag, AMPI_COMM_WORLD, &mdl->ReqRcv);
+	MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, id,
+		 iTag, MPI_COMM_WORLD, &mdl->ReqRcv);
 
 	return ret;
 	}
@@ -751,7 +755,7 @@ void AdjustDataSize(MDL mdl)
 		 ** here will cause problems, make sure to take this into account!
 		 ** This is certainly true in using the MPL library.
 		 */
-		AMPI_Status status;
+		MPI_Status status;
 		CAHEAD caOut;
 
 		/* cancel outstanding receive by sending a message to
@@ -760,9 +764,9 @@ void AdjustDataSize(MDL mdl)
 		caOut.cid = 0;
 		caOut.mid = MDL_MID_CACHEDONE;
 		caOut.id = mdl->idSelf;
-		AMPI_Send(&caOut,sizeof(CAHEAD),AMPI_BYTE, mdl->idSelf,
-			 MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
-		AMPI_Wait(&mdl->ReqRcv, &status);
+		MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, mdl->idSelf,
+			 MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		MPI_Wait(&mdl->ReqRcv, &status);
 
 		mdl->iMaxDataSize = iMaxDataSize;
 		mdl->iCaBufSize = sizeof(CAHEAD) + 
@@ -779,9 +783,9 @@ void AdjustDataSize(MDL mdl)
 		/*
 		 * Fire up receive again.
 		 */
-		AMPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, AMPI_BYTE,
-			  AMPI_ANY_SOURCE, MDL_TAG_CACHECOM,
-			  AMPI_COMM_WORLD, &mdl->ReqRcv);
+		MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE,
+			  MPI_ANY_SOURCE, MDL_TAG_CACHECOM,
+			  MPI_COMM_WORLD, &mdl->ReqRcv);
 		}
 	}
 
@@ -832,8 +836,8 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	    /*
 	     * Fire up first receive
 	     */
-	    AMPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, AMPI_BYTE, AMPI_ANY_SOURCE,
-		      MDL_TAG_CACHECOM, AMPI_COMM_WORLD, &mdl->ReqRcv);
+	    MPI_Irecv(mdl->pszRcv,mdl->iCaBufSize, MPI_BYTE, MPI_ANY_SOURCE,
+		      MDL_TAG_CACHECOM, MPI_COMM_WORLD, &mdl->ReqRcv);
 	    }
 	
 	if (cid >= mdl->nMaxCacheIds) {
@@ -925,6 +929,8 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->caReq.cid = cid;
 	c->caReq.mid = MDL_MID_CACHEREQ;
 	c->caReq.id = mdl->idSelf;
+	c->iSerial = 1;
+	c->iSerialLast = calloc(mdl->nThreads, sizeof(int));
 	return(c);
 	}
 
@@ -960,19 +966,19 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	    }
 	else {
 		/*
-		 ** Must use non-blocking sends here, we will never wait
-		 ** for these sends to complete, but will know for sure
-		 ** that they have completed.
+		 ** Everybody checks in with id 0
 		 */
-		AMPI_Send(&caIn,sizeof(CAHEAD),AMPI_BYTE, 0,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	    caIn.iSerial = c->iSerial++;
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	sprintf(achDiag, "%d: In CI, cache %d\n", mdl->idSelf, cid);
 	mdlDiag(mdl, achDiag);
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		AMPI_Send(&caIn,sizeof(CAHEAD),AMPI_BYTE, id,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+		caIn.iSerial = c->iSerial++;
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
 	else {
@@ -984,7 +990,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	sprintf(achDiag, "%d: After CI, cache %d\n", mdl->idSelf, cid);
 	mdlDiag(mdl, achDiag);
 	AdjustDataSize(mdl);
-	AMPI_Barrier(AMPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 /*
@@ -1020,13 +1026,15 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		 ** for these sends to complete, but will know for sure
 		 ** that they have completed.
 		 */
-		AMPI_Send(&caIn,sizeof(CAHEAD),AMPI_BYTE, 0,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	    caIn.iSerial = c->iSerial++;
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		AMPI_Send(&caIn,sizeof(CAHEAD),AMPI_BYTE, id,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	    caIn.iSerial = c->iSerial++;
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
 	else {
@@ -1036,7 +1044,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		    }	
 	    }	
 	AdjustDataSize(mdl);
-	AMPI_Barrier(AMPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 void mdlFinishCache(MDL mdl,int cid)
@@ -1049,29 +1057,29 @@ void mdlFinishCache(MDL mdl,int cid)
 	char *t;
 	int j, iKey;
 	int last;
-	AMPI_Status status;
-	AMPI_Request reqFlsh;
-	AMPI_Request reqBoth[2];
+	MPI_Status status;
+	MPI_Request reqFlsh;
+	MPI_Request reqBoth[2];
 	int index;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
 		 * Extra checkout to let everybody finish before
 		 * flushes start.
-		 */
 		caOut.cid = cid;
 		caOut.mid = MDL_MID_CACHEOUT;
 		caOut.id = mdl->idSelf;
 		for(id = 0; id < mdl->nThreads; id++) {
 		    if(id == mdl->idSelf)
 			continue;
-		    AMPI_Send(&caOut,sizeof(CAHEAD),AMPI_BYTE, id,
-			     MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+		    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
+			     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		    }
 		++c->nCheckOut;
 		while(c->nCheckOut < mdl->nThreads)
 		    mdlCacheReceive(mdl, NULL);
 		c->nCheckOut = 0;
+		 */
 		/*
 		 ** Must flush all valid data elements.
 		 */
@@ -1089,35 +1097,16 @@ void mdlFinishCache(MDL mdl,int cid)
 				t = &c->pLine[i*c->iLineSize];
 				for(j = 0; j < c->iLineSize; ++j)
 				    pszFlsh[j] = t[j];
-				/*
-				 * Use Synchronous send so as not to
-				 * overwhelm the receiver.
-				 */
-				AMPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
-					 AMPI_BYTE, id, MDL_TAG_CACHECOM,
-					 AMPI_COMM_WORLD, &reqFlsh); 
-				/*
-				 * Wait for the Flush to complete, but
-				 * also service any incoming cache requests.
-				*/
-				reqBoth[0] = mdl->ReqRcv;
-				reqBoth[1] = reqFlsh;
-				
-				while(1) {
-				    AMPI_Waitany(2, reqBoth, &index, &status);
-				    assert(!(index != 0 && reqBoth[0] ==
-					   AMPI_REQUEST_NULL));
-				    mdl->ReqRcv = reqBoth[0];
-				    if(index == 1) /* Flush has completed */
-					break;
-				    else if(index == 0) {
-					mdlCacheReceive(mdl, NULL);
-					reqBoth[0] = mdl->ReqRcv;
-					}
-				    else
-					assert(0);
-				    }
+
+	    caFlsh->iSerial = c->iSerial++;
+				MPI_Send(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+					 MPI_BYTE, id, MDL_TAG_CACHECOM,
+					 MPI_COMM_WORLD); 
 				}
+			/*
+			 * Check for any incoming cache requests.
+			*/
+			mdlCacheCheck(mdl);
 			}
 		}
 	/*
@@ -1132,13 +1121,15 @@ void mdlFinishCache(MDL mdl,int cid)
 		mdlCacheReceive(mdl, NULL);
 	    }
 	else {
-	    AMPI_Send(&caOut,sizeof(CAHEAD),AMPI_BYTE, 0,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	    caOut.iSerial = c->iSerial++;
+	    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, 0,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 	    }
 	if(mdl->idSelf == 0) {
 	    for(id = 1; id < mdl->nThreads; id++) {
-		AMPI_Send(&caOut,sizeof(CAHEAD),AMPI_BYTE, id,
-			       MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	    caOut.iSerial = c->iSerial++;
+		MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, id,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 		}
 	    }
 	else {
@@ -1154,6 +1145,7 @@ void mdlFinishCache(MDL mdl,int cid)
 	free(c->pTag);
 	free(c->pbKey);
 	free(c->pLine);
+	free(c->iSerialLast);
 	c->iType = MDL_NOCACHE;
 	  
 	AdjustDataSize(mdl);
@@ -1172,26 +1164,27 @@ void mdlFinishCache(MDL mdl,int cid)
 	 * Note: I'm sending a message to myself.
 	 */
 	if(last) {
-	    AMPI_Status status;
+	    MPI_Status status;
 	  
 	    caOut.cid = cid;
 	    caOut.mid = MDL_MID_CACHEDONE;
 	    caOut.id = mdl->idSelf;
-	    AMPI_Send(&caOut,sizeof(CAHEAD),AMPI_BYTE, mdl->idSelf,
-		     MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
-	    AMPI_Wait(&mdl->ReqRcv, &status);
+	    caOut.iSerial = c->iSerial++;
+	    MPI_Send(&caOut,sizeof(CAHEAD),MPI_BYTE, mdl->idSelf,
+		     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+	    MPI_Wait(&mdl->ReqRcv, &status);
 	    }
-	AMPI_Barrier(AMPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 
 void mdlCacheCheck(MDL mdl)
 {
     int flag;
-    AMPI_Status status;
+    MPI_Status status;
 
     while (1) {
-	AMPI_Test(&mdl->ReqRcv, &flag, &status);
+	MPI_Test(&mdl->ReqRcv, &flag, &status);
 	if(flag == 0)
 	    break;
 	mdlCacheReceive(mdl,NULL);
@@ -1209,8 +1202,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	char ach[80];
 	CAHEAD *caFlsh;
 	char *pszFlsh;
-	AMPI_Status status;
-	AMPI_Request reqFlsh;
+	MPI_Status status;
+	MPI_Request reqFlsh;
 
 	++c->nAccess;
 	if (!(c->nAccess & MDL_CHECK_MASK))
@@ -1262,8 +1255,9 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	c->caReq.mid = MDL_MID_CACHEREQ;
 	c->caReq.id = mdl->idSelf;
 	c->caReq.iLine = iLine;
-	AMPI_Send(&c->caReq,sizeof(CAHEAD),AMPI_BYTE,
-		 id,MDL_TAG_CACHECOM, AMPI_COMM_WORLD);
+	c->caReq.iSerial = c->iSerial++;
+	MPI_Send(&c->caReq,sizeof(CAHEAD),MPI_BYTE,
+		 id,MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 	++c->nMiss;
 	/*
 	 **	LRU Victim Search!
@@ -1311,9 +1305,10 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 			caFlsh->iLine = iKeyVic >> c->iInvKeyShift;
 			for(i = 0; i < c->iLineSize; ++i)
 			    pszFlsh[i] = pLine[i];
-			AMPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
-				 AMPI_BYTE, idVic,
-				 MDL_TAG_CACHECOM, AMPI_COMM_WORLD, &reqFlsh); 
+			caFlsh->iSerial = c->iSerial++;
+			MPI_Isend(caFlsh, sizeof(CAHEAD)+c->iLineSize,
+				 MPI_BYTE, idVic,
+				 MDL_TAG_CACHECOM, MPI_COMM_WORLD, &reqFlsh); 
 			}
 		/*
 		 ** If valid iLine then "unlink" it from the cache.
@@ -1354,7 +1349,7 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	while (1) {
 		if(mdlCacheReceive(mdl,pLine)) {
 		      if(caFlsh)
-			    AMPI_Wait(&reqFlsh, &status);
+			    MPI_Wait(&reqFlsh, &status);
 		      return(&pLine[iElt*c->iDataSize]);
 		      }
 		}
