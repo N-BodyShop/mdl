@@ -916,6 +916,7 @@ void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	sprintf(achDiag, "%d: After CI, cache %d\n", mdl->idSelf, cid);
 	mdlDiag(mdl, achDiag);
 	AdjustDataSize(mdl);
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 /*
@@ -965,6 +966,7 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 		    }	
 	    }	
 	AdjustDataSize(mdl);
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 void mdlFinishCache(MDL mdl,int cid)
@@ -1083,6 +1085,7 @@ void mdlFinishCache(MDL mdl,int cid)
 		     MDL_TAG_CACHECOM, MPI_COMM_WORLD);
 	    MPI_Wait(&mdl->ReqRcv, &status);
 	    }
+	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
 
