@@ -7,8 +7,7 @@
 
 #define SRV_STOP		0
 
-#define MDL_CACHE_SIZE		100000000
-//#define MDL_CACHE_SIZE		  1000000
+#define MDL_CACHE_SIZE		64000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
@@ -192,7 +191,7 @@ int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
 int mdlThreads(MDL);
 int mdlSelf(MDL);
-int mdlSwap(MDL,int,int,void *,int,int *,int *);
+int mdlSwap(MDL,int,size_t,void *,size_t,size_t *,size_t *);
 void mdlDiag(MDL,char *);
 void mdlAddService(MDL,int,void *,void (*)(void *,void *,int,void *,int *),
 				   int,int);
