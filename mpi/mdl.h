@@ -95,10 +95,10 @@ typedef struct mdlContext {
 	int iMaxDataSize;
 	int iCaBufSize;
 	char *pszRcv;
-	int midRcv;
 	int *pmidRpl;
 	MPI_Request *pReqRpl;
 	char **ppszRpl;
+	char *pszFlsh;
 	int nMaxCacheIds;
 	CACHE *cache;
 	} * MDL;
