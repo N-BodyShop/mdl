@@ -207,7 +207,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 				}
 			(*fcnChild)(mdl);
 			mdlFinish(mdl);
-			return (0);
+			exit(0);
 			}
 		}
 	else {
