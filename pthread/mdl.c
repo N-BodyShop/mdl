@@ -2,7 +2,6 @@
  ** A very low level Machine model. For homogeneous systems only!
  ** This is the pthreads mdl module.
  **
- ** WARNING: Do not use pthread_cond_wait() anywhere!
  */
 #include <stdio.h>
 #include <stddef.h>
@@ -32,7 +31,6 @@ int smp_num_cpus = 1;
 #define MDL_DEFAULT_CACHEIDS	5
 
 #define MDL_TRANS_SIZE			50000 
-
 
 /*
  ** GLOBAL BARRIER VARIABLES! All threads must see these.
@@ -158,13 +156,32 @@ void BasicInit(MDL mdl)
     assert(mdl->swxOwn.pszBuf != NULL);
     mdl->swxOwn.bRec = 0;
     pthread_mutex_init(&mdl->swxOwn.mux,NULL);
-	pthread_cond_init(&mdl->swxOwn.sigRec,NULL);
-	pthread_cond_init(&mdl->swxOwn.sigSnd,NULL);
+    pthread_cond_init(&mdl->swxOwn.sigRec,NULL);
+    pthread_cond_init(&mdl->swxOwn.sigSnd,NULL);
+    /*
+    ** Initialize Cache mailboxes.
+    */
+    mdl->iMaxDataSize = 0;
+    mdl->iCaBufSize = sizeof(CAHEAD);
+    pthread_mutex_init(&mdl->muxRing,NULL);
+    mdl->iRingHd = 0;
+    mdl->iRingTl = 0;
+    for(i = 0; i < MDL_MBX_RING_SZ; i++) {
+	mdl->mbxCache[i].pszIn = malloc(mdl->iCaBufSize);
+	assert(mdl->mbxCache[i].pszIn != NULL);
+	mdl->mbxCache[i].bRel = 1;
+	mdl->mbxCache[i].bReq = 0;
+	pthread_mutex_init(&mdl->mbxCache[i].mux,NULL);
+	pthread_cond_init(&mdl->mbxCache[i].sigReq,NULL);
+	pthread_cond_init(&mdl->mbxCache[i].sigRel,NULL);
+	}
     }
 
 
 void BasicDestroy(MDL mdl)
 {
+    int i;
+    
     pthread_mutex_destroy(&mdl->mbxOwn.mux);
 	pthread_cond_destroy(&mdl->mbxOwn.sigReq);
 	pthread_cond_destroy(&mdl->mbxOwn.sigRpl);
@@ -173,6 +190,14 @@ void BasicDestroy(MDL mdl)
 	pthread_cond_destroy(&mdl->swxOwn.sigRel);
 	pthread_cond_destroy(&mdl->swxOwn.sigRec);
 	pthread_cond_destroy(&mdl->swxOwn.sigSnd);
+    pthread_mutex_destroy(&mdl->muxRing);
+    for(i = 0; i < MDL_MBX_RING_SZ; i++) {
+	pthread_mutex_destroy(&mdl->mbxCache[i].mux);
+	pthread_cond_destroy(&mdl->mbxCache[i].sigReq);
+	pthread_cond_destroy(&mdl->mbxCache[i].sigRel);
+	free(mdl->mbxCache[i].pszIn);
+	}
+    
     free(mdl->swxOwn.pszBuf);
     free(mdl->psrv);
     free(mdl->mbxOwn.pszIn);
@@ -472,7 +497,7 @@ void mdlGetReply(MDL mdl,int id,void *vOut,int *pnOutBytes)
 void mdlHandler(MDL mdl)
 {
     MBX *pmbx;
-    int i,nInBytes,sid;
+    int nInBytes,sid;
     
     /*
      ** First open the floodgates!
@@ -495,176 +520,15 @@ void mdlHandler(MDL mdl)
         assert(nInBytes <= mdl->psrv[sid].nInBytes);
 		pmbx->nBytes = 0;
         assert(mdl->psrv[sid].fcnService != NULL);
-		(*mdl->psrv[sid].fcnService)(mdl->psrv[sid].p1,
-									 pmbx->pszIn,nInBytes,
-									 pmbx->pszOut,&pmbx->nBytes);
+	(*mdl->psrv[sid].fcnService)(mdl->psrv[sid].p1,
+				     pmbx->pszIn,nInBytes,
+				     pmbx->pszOut,&pmbx->nBytes);
         assert(pmbx->nBytes <= mdl->psrv[sid].nOutBytes);
         pmbx->bRpl = 1;
 		pthread_cond_signal(&pmbx->sigRpl);
         pthread_mutex_unlock(&pmbx->mux);
 		}
     }
-
-#if (0)
-/*
- ** This is a tricky function. It initiates a bilateral transfer between
- ** two threads. Both threads MUST be expecting this transfer. The transfer
- ** occurs between idSelf <---> 'id' or 'id' <---> idSelf as seen from the
- ** opposing thread. It is designed as a high performance non-local memory
- ** swapping primitive and implementation will vary in non-trivial ways 
- ** between differing architectures and parallel paradigms (eg. message
- ** passing and shared address space). A buffer is specified by 'pszBuf'
- ** which is 'nBufBytes' in size. Of this buffer the LAST 'nOutBytes' are
- ** transfered to the opponent, in turn, the opponent thread transfers his
- ** nBufBytes to this thread's buffer starting at 'pszBuf'.
- ** If the transfer completes with no problems the function returns 1.
- ** If the function returns 0 then one of the players has not received all
- ** of the others memory, however he will have successfully transfered all
- ** of his memory.
- */
-int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
-	    int *pnSndBytes,int *pnRcvBytes)
-{
-    SWX *pout,*pin;
-    int i,nInBytes,nOutBufBytes,nInMax,nOutMax;
-    char *pszBuf = vBuf;
-    char *pszIn,*pszOut;
-    
-    *pnRcvBytes = 0;
-    *pnSndBytes = 0;
-    /*
-     **	Send number of rejects to target thread amount of free space
-     */ 
-    pout = &mdl->pmdl[id]->swxOwn;
-    pin = &mdl->swxOwn;
-	
-	pthread_mutex_lock(&pout->mux);
-	while (pout->bRel) {
-		pthread_cond_wait(&pout->sigRel,&pout->mux);
-		}
-    pout->bRel = 0;
-	/*
-	 ** At this point no other thread can initiate a transfer until we
-	 ** release. This means it is now safe to do "lock-step" operations
-	 ** between the two threads.
-	 */
-    pout->nInBytes = nOutBytes;
-    pout->nOutBufBytes = nBufBytes;
-	pout->bRec = 1;
-	pthread_cond_signal(&pout->sigRec);
-    pthread_mutex_unlock(&pout->mux);
-    /*
-     ** Receive the number of target thread rejects and target free space
-     */
-	pthread_mutex_lock(&pin->mux);
-    while (!pin->bRec) {
-		pthread_cond_wait(&pin->sigRec,&pin->mux);
-		}
-    nInBytes = pin->nInBytes;
-    nOutBufBytes = pin->nOutBufBytes;
-    pin->bRec = 0;
-	pthread_cond_signal(&pin->sigSnd);
-    pthread_mutex_unlock(&pin->mux);
-    pszIn = pszBuf;
-    pszOut = &pszBuf[nBufBytes-nOutBytes];
-    /*
-     ** Start bilateral transfers. Note: One processor is GUARANTEED to 
-     ** complete all its transfers.
-     */
-    while (nOutBytes && nInBytes) {
-		/*
-		 ** nOutMax is the maximum number of bytes allowed to be sent
-		 ** nInMax is the number of bytes which will be received.
-		 */
-        nOutMax = (nOutBytes < MDL_TRANS_SIZE)?nOutBytes:MDL_TRANS_SIZE;
-		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
-        nInMax = (nInBytes < MDL_TRANS_SIZE)?nInBytes:MDL_TRANS_SIZE;
-		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
-		/*
-		 ** Transfer...
-		 */
-		pthread_mutex_lock(&pout->mux);
-        while (pout->bRec) {
-			pthread_cond_wait(&pout->sigSnd,&pout->mux);
-            }
-        for (i=0;i<nOutMax;++i) pout->pszBuf[i] = pszOut[i];
-        pout->bRec = 1;
-		pthread_cond_signal(&pout->sigRec);
-        pthread_mutex_unlock(&pout->mux);
-		pthread_mutex_lock(&pin->mux);
-        while (!pin->bRec) {
-			pthread_cond_wait(&pin->sigRec,&pin->mux);
-            }
-		for (i=0;i<nInMax;++i) pszIn[i] = pin->pszBuf[i];
-        pin->bRec = 0;
-		pthread_cond_signal(&pin->sigSnd);
-        pthread_mutex_unlock(&pin->mux);
-		/*
-		 ** Adjust pointers and counts for next itteration.
-		 */
-		pszOut = &pszOut[nOutMax];
-		nOutBytes -= nOutMax;
-		nOutBufBytes -= nOutMax;
-		*pnSndBytes += nOutMax;
-		pszIn = &pszIn[nInMax];
-		nInBytes -= nInMax;
-		nBufBytes -= nInMax;
-		*pnRcvBytes += nInMax;
-		}
-    /*
-     ** At this stage we perform only unilateral transfers, and here we
-     ** could exceed the opponent's storage capacity.
-     */
-    while (nOutBytes && nOutBufBytes) {
-        nOutMax = (nOutBytes < MDL_TRANS_SIZE)?nOutBytes:MDL_TRANS_SIZE;
-		nOutMax = (nOutMax < nOutBufBytes)?nOutMax:nOutBufBytes;
-		pthread_mutex_lock(&pout->mux);
-        while (pout->bRec) {
-			pthread_cond_wait(&pout->sigSnd,&pout->mux);
-            }
-        for (i=0;i<nOutMax;++i) pout->pszBuf[i] = pszOut[i];
-        pout->bRec = 1;
-		pthread_cond_signal(&pout->sigRec);
-        pthread_mutex_unlock(&pout->mux);
-		/*
-		 ** Adjust pointers and counts.
-		 */
-		pszOut = &pszOut[nOutMax];
-		nOutBytes -= nOutMax;
-		nOutBufBytes -= nOutMax;
-		*pnSndBytes += nOutMax;
-		}
-    while (nInBytes && nBufBytes) {
-        nInMax = (nInBytes < MDL_TRANS_SIZE)?nInBytes:MDL_TRANS_SIZE;
-		nInMax = (nInMax < nBufBytes)?nInMax:nBufBytes;
-		pthread_mutex_lock(&pin->mux);
-        while (!pin->bRec) {
-			pthread_cond_wait(&pin->sigRec,&pin->mux);
-            }
-		for (i=0;i<nInMax;++i) pszIn[i] = pin->pszBuf[i];
-        pin->bRec = 0;
-		pthread_cond_signal(&pin->sigSnd);
-        pthread_mutex_unlock(&pin->mux);
-        pszIn = &pszIn[nInMax];
-		nInBytes -= nInMax;
-		nBufBytes -= nInMax;
-		*pnRcvBytes += nInMax;
-		}
-	/*
-	 ** Release future transfers.
-	 */
-	pthread_mutex_lock(&pout->mux);
-	while (pout->bRec) {
-		pthread_cond_wait(&pout->sigSnd,&pout->mux);
-		}
-    pout->bRel = 1;
-	pthread_cond_signal(&pout->sigRel);
-	pthread_mutex_unlock(&pout->mux);
-    if (nOutBytes) return(0);
-    else if (nInBytes) return(0);
-    else return(1);
-    }
-#endif
 
 /*
  ** This is a tricky function. It initiates a bilateral transfer between
@@ -809,10 +673,107 @@ int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
 /*
  ** START OF CACHE CODE
  */
+#define MDL_MID_CACHEOUT	4
+#define MDL_MID_CACHEFLSH	5
+
 #define MDL_RANDMOD		1771875
 #define MDL_RAND(mdl) (mdl->uRand = (mdl->uRand*2416+374441)%MDL_RANDMOD)
 #define MDL_CHECK_MASK  	0x7f
 #define BILLION				1000000000
+
+#define MDL_ADVANCE_RING(X) (X)++; if((X) >= MDL_MBX_RING_SZ) (X) = 0
+
+int mdlCacheReceive(MDL mdl)
+{
+	CACHE *c;
+	MBX *pmbx; /* Cache mailbox */
+	CAHEAD *ph;
+	char *pszRcv;
+	char *t;
+	int n,i,nBytes;
+
+	pthread_mutex_lock(&mdl->muxRing);
+	assert(mdl->iRingHd != mdl->iRingTl);
+	pmbx = &mdl->mbxCache[mdl->iRingHd]; /* Cache mailbox */
+	MDL_ADVANCE_RING(mdl->iRingHd);
+	pthread_mutex_unlock(&mdl->muxRing);
+
+	ph = (CAHEAD *)pmbx->pszIn;
+	pszRcv = &pmbx->pszIn[sizeof(CAHEAD)];
+	pthread_mutex_lock(&pmbx->mux);
+
+	assert(ph->iSeq == mdl->iRecSeq[ph->id]);
+	
+	mdl->iRecSeq[ph->id]++;
+
+	c = &mdl->cache[ph->cid];
+	switch (ph->mid) {
+	case MDL_MID_CACHEOUT:
+		++c->nCheckOut;
+		pthread_mutex_unlock(&pmbx->mux);
+		return(0);
+	case MDL_MID_CACHEFLSH:
+		assert(c->iType == MDL_COCACHE);
+		/*
+		 ** Unpack the data into the 'sentinel-line' cache data.
+		 */
+		nBytes = c->iLineSize;
+		for (i=0;i<nBytes;++i) c->pLine[i] = pszRcv[i];
+		i = ph->iLine*MDL_CACHELINE_ELTS;
+		/*
+		 * Data is out; unlock it
+		 */
+		pthread_mutex_unlock(&pmbx->mux);
+		t = &c->pData[i*c->iDataSize];
+		/*
+		 ** Make sure we don't combine beyond the number of data elements!
+		 */
+		n = i + MDL_CACHELINE_ELTS;
+		if (n > c->nData) n = c->nData;
+		n -= i;
+		n *= c->iDataSize;
+		for (i=0;i<n;i+=c->iDataSize) {
+			(*c->combine)(&t[i],&c->pLine[i]);
+			}
+		return(0);
+	default:
+	    assert(0);
+	    }
+	}
+
+void AdjustDataSize(MDL mdl)
+{
+	int i,iMaxDataSize;
+
+	/*
+	 ** Change buffer size?
+	 */
+	iMaxDataSize = 0;
+	for (i=0;i<mdl->nMaxCacheIds;++i) {
+		if (mdl->cache[i].iType == MDL_NOCACHE) continue;
+		if (mdl->cache[i].iDataSize > iMaxDataSize) {
+			iMaxDataSize = mdl->cache[i].iDataSize;
+			}
+		}
+	if (iMaxDataSize != mdl->iMaxDataSize) {
+		/*
+		 ** Create new buffer with realloc?
+		 ** Be very careful when reallocing buffers in other libraries
+		 ** (not PVM) to be sure that the buffers are not in use!
+		 ** A pending non-blocking receive on a buffer which is realloced
+		 ** here will cause problems, make sure to take this into account!
+		 ** This is certainly true in using the MPL library.
+		 */
+		mdl->iMaxDataSize = iMaxDataSize;
+		mdl->iCaBufSize = sizeof(CAHEAD) + 
+			iMaxDataSize*(1 << MDL_CACHELINE_BITS);
+		for(i = 0; i < MDL_MBX_RING_SZ; i++) {
+		    mdl->mbxCache[i].pszIn = realloc(mdl->mbxCache[i].pszIn,
+						  mdl->iCaBufSize);
+		    assert(mdl->mbxCache[i].pszIn != NULL);
+		    }
+		}
+	}
 
 /*
  ** Special MDL memory allocation functions for allocating memory 
@@ -867,13 +828,69 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->pData = pData;
 	c->iDataSize = iDataSize;
 	c->nData = nData;
+	c->pDataMax = nData*iDataSize;
+
+	c->pTrans = NULL;
+	c->pTag = NULL;
+	c->pbKey = NULL;
+	c->pLine = NULL;
+	
+	return(c);
+	}
+
+/*
+ ** Initialize a caching space.
+ */
+void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
+{
+	CACHE *c;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+	c->iType = MDL_ROCACHE;
+	/*
+	 ** For an ROcache these two functions are not needed.
+	 */
+	c->init = NULL;
+	c->combine = NULL;
+	/*
+	 ** THIS IS A SYNCHRONIZE!!!
+	 */
+	mdlBarrier(mdl);
+	}
+
+/*
+ ** Initialize a combiner caching space.
+ */
+void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
+				void (*init)(void *),void (*combine)(void *,void *))
+{
+	CACHE *c;
+	int i;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+
+	c->iType = MDL_COCACHE;
+	c->init = init;
+	c->combine = combine;
 	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
 	c->iKeyShift = 0;
 	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
-	if(c->iKeyShift < MDL_CACHELINE_BITS)
+	c->iIdMask = (1 << c->iKeyShift) - 1;
+	
+	if(c->iKeyShift < MDL_CACHELINE_BITS) {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) | id.
+	   */
+	    c->iInvKeyShift = MDL_CACHELINE_BITS;
 	    c->iKeyShift = 0;
-	else
+	    }
+	else {
+	  /*
+	   * Key will be (index & MDL_INDEX_MASK) << KeyShift | id.
+	   */
+	    c->iInvKeyShift = c->iKeyShift;
 	    c->iKeyShift -= MDL_CACHELINE_BITS;
+	    }
 	/*
 	 ** Determine the number of cache lines to be allocated.
 	 */
@@ -916,112 +933,384 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	 */
 	c->pLine = malloc(c->nLines*c->iLineSize);
 	assert(c->pLine != NULL);
-	return(c);
-	}
-
-/*
- ** Initialize a caching space.
- */
-void mdlROcache(MDL mdl,int cid,void *pData,int iDataSize,int nData)
-{
-	CACHE *c;
-
-	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
-	c->iType = MDL_ROCACHE;
-	/*
-	 ** For an ROcache these two functions are not needed.
-	 */
-	c->init = NULL;
-	c->combine = NULL;
+	c->nCheckOut = 0;
+	for(i = 0; i < mdl->nThreads; i++) {
+	    mdl->iRecSeq[i] = 0;
+	    mdl->iSndSeq[i] = 0;
+	    }
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!
 	 */
+	AdjustDataSize(mdl);
 	mdlBarrier(mdl);
 	}
 
-/*
- ** Initialize a combiner caching space.
- */
-void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
-				void (*init)(void *),void (*combine)(void *,void *))
+void mdlCacheRequest(MDL mdl, int id, int cid, int mid, char *pszData,
+		     int iLine, int iLineSize)
 {
-	CACHE *c;
+    pthread_mutex_t *pmux_ring = &mdl->pmdl[id]->muxRing;
+    MBX *pmbx;
+    CAHEAD *caFlsh;
+    char *pszFlsh;
+    int iRingTl;
+    int iOldRingTl;
 
-	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
-	c->iType = MDL_COCACHE;
-	c->init = init;
-	c->combine = combine;
-	/*
-	 ** THIS IS A SYNCHRONIZE!!!
-	 */
-	mdlBarrier(mdl);
+    assert(id != mdl->idSelf);
+    /*
+     * Grab my place in the ring.
+     */
+    pthread_mutex_lock(pmux_ring);
+    iRingTl = mdl->pmdl[id]->iRingTl;
+    MDL_ADVANCE_RING(iRingTl);
+    while(iRingTl == mdl->pmdl[id]->iRingHd) {
+	pthread_mutex_unlock(pmux_ring);
+	mdlCacheCheck(mdl);
+	pthread_mutex_lock(pmux_ring);
+	iRingTl = mdl->pmdl[id]->iRingTl;
+	MDL_ADVANCE_RING(iRingTl);
 	}
+    
+    iOldRingTl = mdl->pmdl[id]->iRingTl;
+    mdl->pmdl[id]->iRingTl = iRingTl;
+    
+    pmbx = &mdl->pmdl[id]->mbxCache[iOldRingTl];
 
+    caFlsh = (CAHEAD *)pmbx->pszIn;
+    pszFlsh = &pmbx->pszIn[sizeof(CAHEAD)];
+    pthread_mutex_lock(&pmbx->mux);
+
+    pthread_mutex_unlock(pmux_ring);
+
+    caFlsh->cid = cid;
+    caFlsh->mid = mid;
+    caFlsh->id = mdl->idSelf;
+    caFlsh->iSeq = mdl->iSndSeq[id];
+    mdl->iSndSeq[id]++;
+    if(mid == MDL_MID_CACHEFLSH) {
+	int j;
+	
+	caFlsh->iLine = iLine;
+	for(j = 0; j < iLineSize; ++j)
+	    pszFlsh[j] = pszData[j];
+	}
+    pthread_mutex_unlock(&pmbx->mux);
+    }
 
 void mdlFinishCache(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
+	int i,id;
+	int iKey;
 
 	/*
 	 ** THIS IS A SYNCHRONIZE!!!
 	 */
-	mdlBarrier(mdl);
+	if(c->iType == MDL_COCACHE) {
+		/*
+		 ** Must flush all valid data elements.
+		 */
+		for (i=1;i<c->nLines;++i) {
+			iKey = c->pTag[i].iKey;
+			if (iKey >= 0) {
+				/*
+				 ** Flush element since it is valid!
+				 */
+				int iLine = iKey >> c->iInvKeyShift;
+			    
+				id = iKey & c->iIdMask;
+				mdlCacheRequest(mdl, id, cid,
+						MDL_MID_CACHEFLSH, 
+						&c->pLine[i*c->iLineSize],
+						iLine, c->iLineSize);
+						
+				mdlCacheCheck(mdl); /* service incoming */
+				}
+			}
+		if(mdl->idSelf == 0) {
+		    ++c->nCheckOut;
+		    while(c->nCheckOut < mdl->nThreads) {
+			mdlCacheCheck(mdl);
+			}
+		    }
+		else {
+		    mdlCacheRequest(mdl, 0, cid, MDL_MID_CACHEOUT,
+				    NULL, 0, 0);
+		    }
+		if(mdl->idSelf == 0) {
+		    for(id = 1; id < mdl->nThreads; id++) {
+			mdlCacheRequest(mdl, id, cid, MDL_MID_CACHEOUT,
+				    NULL, 0, 0);
+			}
+		    }
+		else {
+		    c->nCheckOut = 0;
+		    while (c->nCheckOut == 0) {
+			mdlCacheCheck(mdl);
+			}	
+		    }	
+	    }
+	else {
+	    mdlBarrier(mdl);
+	    }
+	
 	/*
 	 ** Free up storage and finish.
 	 */
-	free(c->pTrans);
-	free(c->pTag);
-	free(c->pbKey);
-	free(c->pLine);
+	if(c->iType == MDL_COCACHE) {
+	    free(c->pTrans);
+	    free(c->pTag);
+	    free(c->pbKey);
+	    free(c->pLine);
+	    }
 	c->iType = MDL_NOCACHE;
+	AdjustDataSize(mdl);
 	}
 
+void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock);
 
 void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 {
-    CACHE *cc = &mdl->pmdl[id]->cache[cid];
-    
-	return(&cc->pData[iIndex*cc->iDataSize]);
-	}
+	CACHE *c = &mdl->cache[cid];
+	int iKey, i;
+	char *pLine;		/* matched cache line */
+	int iElt;		/* Element in line */
 
+	if(c->iType == MDL_ROCACHE || id == mdl->idSelf) {
+	    CACHE *cc = &mdl->pmdl[id]->cache[cid];
+	    return(&cc->pData[iIndex*c->iDataSize]);
+	    }
+
+	++c->nAccess;
+	if (!(c->nAccess & MDL_CHECK_MASK)) {
+	    mdlCacheCheck(mdl);
+	    }
+	
+	/*
+	 ** Determine memory block key value and cache line.
+	 */
+	iKey = ((iIndex&MDL_INDEX_MASK) << c->iKeyShift)| id;
+
+	i = c->pTrans[iKey & c->iTransMask];
+	/*
+	 ** Check for a match!
+	 */
+	if (c->pTag[i].iKey == iKey) {
+		++c->pTag[i].nLock;
+		pLine = &c->pLine[i*c->iLineSize];
+		iElt = iIndex & MDL_CACHE_MASK;
+		return(&pLine[iElt*c->iDataSize]);
+		}
+	i = c->pTag[i].iLink;
+	/*
+	 ** Collision chain search.
+	 */
+	while (i) {
+		++c->nColl;
+		if (c->pTag[i].iKey == iKey) {
+			++c->pTag[i].nLock;
+			pLine = &c->pLine[i*c->iLineSize];
+			iElt = iIndex & MDL_CACHE_MASK;
+			return(&pLine[iElt*c->iDataSize]);
+			}
+		i = c->pTag[i].iLink;
+		}
+	return(doMiss(mdl, cid, iIndex, id, iKey, 1));
+    }
+
+void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
+{
+	CACHE *c = &mdl->cache[cid];
+	CACHE *cc;
+	char *pLine;
+	int iElt,iLine,i,iKeyVic,nKeyNew;
+	int idVic;
+	int iVictim,*pi;
+	char ach[80];
+	int iLineSize;
+
+	/*
+	 ** Cache Miss.
+	 */
+	++c->nMiss;
+	iLine = iIndex >> MDL_CACHELINE_BITS;
+	/*
+	 **	Victim Search!
+	 ** Note: if more than 1771875 cache lines are present this random
+	 ** number generation may have to be changed, although none of the
+	 ** code will break in this case. The only problem may be non-optimal
+	 ** cache line replacement. Maybe give a warning at initialization?
+	 */
+	iVictim = MDL_RAND(mdl)%c->nLines;
+	iElt = iIndex & MDL_CACHE_MASK;
+	for (i=0;i<c->nLines;++i) {
+	    if (!c->pTag[iVictim].nLock) {
+		/*
+		 ** Found victim.
+		 */
+		iKeyVic = c->pTag[iVictim].iKey;
+		/*
+		 ** 'pLine' will point to the actual data line in the cache.
+		 */
+		pLine = &c->pLine[iVictim*c->iLineSize];
+		if (iKeyVic >= 0) {
+			if (c->iType == MDL_COCACHE) {
+			    /*
+			     ** Flush element since it is valid!
+			     */
+			    int iLine = iKeyVic >> c->iInvKeyShift;
+
+			    idVic = iKeyVic&c->iIdMask;
+
+#if 0
+				fprintf(stderr, "%d %d %d\n",
+					mdl->idSelf, idVic, iLine);
+#endif
+			    
+			    mdlCacheRequest(mdl, idVic, cid,
+					    MDL_MID_CACHEFLSH, pLine,
+					    iLine, c->iLineSize);
+			    }
+			/*
+			 ** If valid iLine then "unlink" it from the cache.
+			 */
+			pi = &c->pTrans[iKeyVic & c->iTransMask];
+			while (*pi != iVictim) pi = &c->pTag[*pi].iLink;
+			*pi = c->pTag[iVictim].iLink;
+			}
+		c->pTag[iVictim].iKey=iKey;
+		if(lock)
+		    c->pTag[iVictim].nLock = 1;
+		/*
+		 **	Add the modified victim tag back into the cache.
+		 ** Note: the new element is placed at the head of the chain.
+		 */
+		pi = &c->pTrans[iKey & c->iTransMask];
+		c->pTag[iVictim].iLink = *pi;
+		*pi = iVictim;
+		goto Await;
+		}
+	    if (++iVictim == c->nLines) iVictim = 0;
+	    }
+	/*
+	 ** Cache Failure!
+	 */
+	sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
+	mdlDiag(mdl,ach);
+	exit(1);
+ Await:
+	/*
+	 ** Figure out whether this is a "new" miss.
+	 ** This is for statistics only!
+	 */
+	if (iKey >= c->nKeyMax) {			/* !!! */
+		nKeyNew = iKey+500;
+		c->pbKey = realloc(c->pbKey,nKeyNew);
+		assert(c->pbKey != NULL);
+		for (i=c->nKeyMax;i<nKeyNew;++i) c->pbKey[i] = 0;
+		c->nKeyMax = nKeyNew;
+		}
+	if (!c->pbKey[iKey]) {
+		c->pbKey[iKey] = 1;
+		++c->nMin;
+		}
+	/*
+	 ** At this point 'pLine' is the recipient cache line for the 
+	 ** data requested from processor 'id'.
+	 */	
+	cc = &mdl->pmdl[id]->cache[cid];
+
+	if ((iLine+1)*c->iLineSize > cc->pDataMax) {
+	    iLineSize = cc->pDataMax - iLine*c->iLineSize;
+	}
+	else {
+	    iLineSize = c->iLineSize;
+	} 
+
+	for(i = 0; i < iLineSize; i++)
+	    pLine[i] = cc->pData[iLine*c->iLineSize + i];
+	
+	if (c->iType == MDL_COCACHE) {
+		/*
+		 ** Call the initializer function for all elements in 
+		 ** the cache line.
+		 */
+		for (i=0;i<iLineSize;i+=c->iDataSize) {
+			(*c->init)(&pLine[i]);
+			}
+		}
+
+	return(&pLine[iElt*c->iDataSize]);
+	}
 
 void mdlRelease(MDL mdl,int cid,void *p)
 {
+	CACHE *c = &mdl->cache[cid];
+	int iLine,iData;
+	
+	if(c->iType == MDL_ROCACHE)
+	    return;
+	
+	iLine = ((char *)p - c->pLine) / c->iLineSize;
+	/*
+	 ** Check if the pointer fell in a cache line, otherwise it
+	 ** must have been a local pointer.
+	 */
+	if (iLine > 0 && iLine < c->nLines) {
+		--c->pTag[iLine].nLock;
+		assert(c->pTag[iLine].nLock >= 0);
+		}
+	else {
+		iData = ((char *)p - c->pData) / c->iDataSize;
+		assert(iData >= 0 && iData < c->nData);
+		}
     }
-
 
 void mdlCacheCheck(MDL mdl)
 {
+    while (1) {
+	pthread_mutex_lock(&mdl->muxRing);
+	if(mdl->iRingHd == mdl->iRingTl) {
+	    pthread_mutex_unlock(&mdl->muxRing);
+	    break;
+	    }
+	pthread_mutex_unlock(&mdl->muxRing);
+	mdlCacheReceive(mdl);
 	}
-
+    }
 
 double mdlNumAccess(MDL mdl,int cid)
 {
-	return(0.0);
+	CACHE *c = &mdl->cache[cid];
+
+	return(c->nAccHigh*1e9 + c->nAccess);
 	}
 
 
 double mdlMissRatio(MDL mdl,int cid)
 {
-	return(0.0);
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
+	
+	if (dAccess > 0.0) return(c->nMiss/dAccess);
+	else return(0.0);
 	}
 
 
 double mdlCollRatio(MDL mdl,int cid)
 {
-	return(0.0);
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
+
+	if (dAccess > 0.0) return(c->nColl/dAccess);
+	else return(0.0);
 	}
 
 
 double mdlMinRatio(MDL mdl,int cid)
 {
-	return(0.0);
+	CACHE *c = &mdl->cache[cid];
+	double dAccess = c->nAccHigh*1e9 + c->nAccess;
+
+	if (dAccess > 0.0) return(c->nMin/dAccess);
+	else return(0.0);
 	}
-
-
-
-
-
-
-
-

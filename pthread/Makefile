@@ -1,10 +1,8 @@
 #
 #       PTHREAD makefile for MDL
 #
-CC_FLAGS = -O3 -D_REENTRANT 
+CFLAGS = -O3 -D_REENTRANT -Wall
 
 default: mdl.o
 
 mdl.o: mdl.c mdl.h
-	cc $(CC_FLAGS) -c mdl.c
-

@@ -3,11 +3,13 @@
 #include <stdio.h>
 #include <pthread.h>
 
-#define MDL_CACHE_SIZE		1000000
+#define MDL_CACHE_SIZE		2000000
 #define MDL_CACHELINE_BITS	3
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
 #define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
+
+#define MDL_MBX_RING_SZ	8
 
 #define SRV_STOP		0
 
@@ -17,6 +19,14 @@ typedef struct cacheTag {
 	int nLast;
 	int iLink;
 	} CTAG;
+
+typedef struct cacheHeader {
+	int cid;
+	int mid;
+	int id;
+	int iLine;
+        int iSeq;
+	} CAHEAD;
 
 typedef struct mbxStruct {
     pthread_mutex_t mux;
@@ -49,19 +59,18 @@ typedef struct cacheSpace {
 	char *pData;
 	int iDataSize;
 	int nData;
+	size_t pDataMax;
 	int iLineSize;
 	int nLines;
 	int nTrans;
 	int iTransMask;
+	int iIdMask;
 	int iKeyShift;
+	int iInvKeyShift;
 	int *pTrans;
 	CTAG *pTag;
 	char *pLine;
-	/*
-	 ** Combiner cache Mutexes, one per data line.
-	 */
-	int nMux;
-	pthread_mutex_t *pMux;
+	int nCheckOut;
 	void (*init)(void *);
 	void (*combine)(void *,void *);
 	/*	
@@ -107,7 +116,14 @@ typedef struct mdlContext {
 	/*
 	 ** Caching stuff!
 	 */
+	MBX mbxCache[MDL_MBX_RING_SZ];
+        pthread_mutex_t muxRing;
+        int iRingHd;
+        int iRingTl;
+        int iRecSeq[128];
+        int iSndSeq[128];
 	unsigned long uRand;
+	int iCaBufSize;
 	int nMaxCacheIds;
 	int iMaxDataSize;
 	CACHE *cache;
@@ -147,11 +163,3 @@ double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
 
 #endif
-
-
-
-
-
-
-
-
