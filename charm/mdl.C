@@ -1249,8 +1249,6 @@ grpCache::flushreply()
 {
     CProxy_AMdl proxyAMdl(aId);
 
-    CkPrintf("In flushreply, nFlush: %d\n", nFlush);
-
     CmiLock(lock);		// single thread at a time
     nFlush--;
     if(nFlush == 0) {
@@ -1343,7 +1341,6 @@ grpCache::FinishCache(int cid, int idSelf)
     CmiUnlock(lock);
 
     if (c->iType == MDL_COCACHE) {
-    	CkPrintf("%d: Flushall started\n", CkMyPe());
 	/*
 	 ** Must flush all valid data elements.
 	 */
@@ -1398,11 +1395,12 @@ grpCache::FinishCache(int cid, int idSelf)
 
 	    assert(mesgFlsh->nLines == iLine);
 
+	    CmiLock(lock);		// single thread at a time
 	    nFlush++;
+	    CmiUnlock(lock);		// single thread at a time
 	    proxyAMdl[idFlush].CacheFlushAll(mesgFlsh);
 	    }
 	waitflush();
-    	CkPrintf("%d: Flushall finished\n", CkMyPe());
 	}
     /*
      ** Free up storage and finish.
