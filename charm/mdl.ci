@@ -37,7 +37,7 @@ mainmodule mdl {
     entry void stopSrv();
     entry [threaded] void reqHandle(MdlMsg *);
 //    entry void reqHandle(MdlMsg *);
-    entry void unblockCache(int iRank);
+    entry void unblockCache(MdlCacheMsg *);
     entry void CacheFlush(MdlCacheMsg *mesg);
     entry void CacheFlushAll(MdlCacheFlshMsg *mesg);
     entry void barrierEnter();

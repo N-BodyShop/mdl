@@ -153,8 +153,6 @@ class grpCache : public NodeGroup
     CthThreadStruct * threadBarrier;
     int nFlush;
     int idFlushing;
-    CthThreadStruct ** threadCache;
-    MdlCacheMsg **msgCache;
     int nElem;			/* number of array elements in this
 				   group */
     int vecIndex[MAXELEM];
@@ -200,13 +198,13 @@ public:
 	char *pszIn;
 	int done;
 	} swapData;
-    CthThreadStruct * threadSwap;
-    CthThreadStruct * threadGetReply;
     CthThreadStruct * threadSrvWait;
     CthThreadStruct * threadBarrier;
     CACHE *cache;		/* pointer to nodegroup cache */
     CmiNodeLock *lock;		/* pointer to nodegroup lock */
-    MdlMsg ** msgReply;
+    CkCallback * cbSwap;
+    CkCallback ** cbService;
+    CkCallback * cbCache;
     int idReplyWait;
     int nInBar;
     int nFlush;
@@ -223,13 +221,11 @@ public:
     void swapSendMore();
     void swapGetMore(MdlSwapMsg *);
     void swapDone();
-    void waitSwapDone();
-    MdlMsg *waitReply(int id);
     void waitSrvStop();
     void stopSrv();
     void reqReply(MdlMsg * mesg);
     void reqHandle(MdlMsg * mesg);
-    void unblockCache(int iRank);
+    void unblockCache(MdlCacheMsg *);
     void CacheFlush(MdlCacheMsg *mesg);
     void CacheFlushAll(MdlCacheFlshMsg *mesg);
     void barrier();

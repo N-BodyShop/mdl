@@ -356,10 +356,9 @@ AMdl::AMdl(int bDiag, const std::string& progname)
 	mdl->iNodeSelf = CkMyNode();
 	mdl->pSelf = this;
 	
-	msgReply = (MdlMsg **) malloc(mdl->nThreads*sizeof(MdlMsg *));
+	cbService = (CkCallback **) malloc(mdl->nThreads*sizeof(CkCallback *));
 	for(i = 0; i < mdl->nThreads; i++)
-	    msgReply[i] = NULL;
-	threadGetReply = 0;
+	    cbService[i] = NULL;
 	nInBar = 0;
 	swapData.id = -1;
 
@@ -556,7 +555,7 @@ int mdlSwap(MDL mdl,int id,
 	char *pszBuf = (char *) vBuf;
         CProxy_AMdl proxyAmdl(aId);
 	
-	mmdl->threadSwap = CthSelf();
+	mmdl->cbSwap = new CkCallback(CkCallback::resumeThread);
 	mmdl->swapData.nOutBytes = nOutBytes;
 	mmdl->swapData.nBufBytes = nBufBytes;
 	mmdl->swapData.nRcvBytes = 0;
@@ -568,7 +567,9 @@ int mdlSwap(MDL mdl,int id,
 	
 	assert(nBufBytes >= nOutBytes);
 	proxyAmdl[id].swapInit(nOutBytes, nBufBytes);
-	mmdl->waitSwapDone();
+	(mmdl->cbSwap)->thread_delay();
+	mmdl->swapData.id = -1;
+	delete mmdl->cbSwap;
 
 	*pnRcvBytes = mmdl->swapData.nRcvBytes;
 	*pnSndBytes = mmdl->swapData.nSndBytes;
@@ -593,8 +594,6 @@ AMdl::swapInit(int nInBytes, int nBufBytes)
 void
 AMdl::swapSendMore() 
 {
-    int i;
-    
     CProxy_AMdl proxyAmdl(aId);
 
     if(swapData.nOutBytes && swapData.nOutBufBytes) {
@@ -627,7 +626,6 @@ void
 AMdl::swapGetMore(MdlSwapMsg *mesg) 
 {
     CProxy_AMdl proxyAmdl(aId);
-    int i;
     int nBytes = mesg->nBytes;	// temporary for bytes transferred
     
     while(swapData.pszIn + nBytes > swapData.pszOut)
@@ -649,18 +647,11 @@ AMdl::swapDone()
 {
     swapData.done++;
     if(swapData.done == 2) {
-	CthAwaken(threadSwap);
+	cbSwap->send();
 	}
     
     }
 	
-void
-AMdl::waitSwapDone()
-{
-	CthSuspend();
-	swapData.id = -1;
-    }
-
 extern "C"
 void mdlDiag(MDL mdl,char *psz)
 {
@@ -734,7 +725,9 @@ void mdlReqService(MDL mdl,int id,int sid,void *vin,int nInBytes)
 		}
 	CProxy_AMdl aProxy(aId);
 	
-	assert(mdl->pSelf->msgReply[mdl->idSelf] == NULL);
+	assert(mdl->pSelf->cbService[id] == NULL);
+
+	mdl->pSelf->cbService[id] = new CkCallback(CkCallback::resumeThread);
 	
 	aProxy[id].reqHandle(mesg);
 	}
@@ -746,7 +739,7 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 	int i, nOutBytes;
 	MdlMsg *mesg;
 
-	mesg = mdl->pSelf->waitReply(id);
+	mesg = (MdlMsg *)(mdl->pSelf->cbService[id])->thread_delay();
 
 	nOutBytes = mesg->ph.nOutBytes;
 	
@@ -755,39 +748,16 @@ void mdlGetReply(MDL mdl,int id,void *vout,int *pnOutBytes)
 		}
 	if (pnOutBytes) *pnOutBytes = nOutBytes;
 	delete mesg;
+	delete mdl->pSelf->cbService[id];
+	mdl->pSelf->cbService[id] = NULL;
 	}
-
-MdlMsg *
-AMdl::waitReply(int id) 
-{
-    MdlMsg * msgTmp;
-    
-    if(msgReply[id]) {
-	msgTmp = msgReply[id];
-	msgReply[id] = NULL;
-	return msgTmp;
-	}
-    else {
-	threadGetReply = CthSelf();
-	idReplyWait = id;
-	CthSuspend();
-	}
-    assert(msgReply[id] != NULL);
-    threadGetReply = 0;
-    msgTmp = msgReply[id];
-    msgReply[id] = NULL;
-    return msgTmp;
-    }
 
 void
 AMdl::reqReply(MdlMsg *mesg) 
 {
-    assert(msgReply[mesg->ph.idFrom] == NULL);
+    assert(cbService[mesg->ph.idFrom] != NULL);
     
-    msgReply[mesg->ph.idFrom] = mesg;
-    
-    if(threadGetReply && mesg->ph.idFrom == idReplyWait)
-	CthAwaken(threadGetReply);
+    cbService[mesg->ph.idFrom]->send(mesg);
 }
 
 
@@ -881,11 +851,6 @@ grpCache::grpCache()
     for (i=0;i<nMaxCacheIds;++i) {
 	    cache[i].iType = MDL_NOCACHE;
 	    }
-    /*
-     ** Allocate caching buffers, with initial data size of 0.
-     */
-    msgCache = NULL;
-    threadCache = NULL;
     }
 
 void
@@ -935,49 +900,15 @@ grpCache::CacheReply(MdlCacheMsg *mesg)
 	 ** This means that this WILL be the reply to this Aquire
 	 ** request.
 	 */
-    int iRank = indexRank(mesg->ch.rid);
-    
-    assert(iRank != -1);
-    CmiLock(lock);		// Avoid contention with waitCache()
-    msgCache[iRank] = mesg;	// save message
-    if(threadCache[iRank]) {
-	CProxy_AMdl proxyAMdl(aId);
-	proxyAMdl[mesg->ch.rid].unblockCache(iRank);
-	}
-    CmiUnlock(lock);
+
+    CProxy_AMdl proxyAMdl(aId);
+    proxyAMdl[mesg->ch.rid].unblockCache(mesg);
     }
 
 void
-AMdl::unblockCache(int iRank)
+AMdl::unblockCache(MdlCacheMsg *mesg)
 {
-    CProxy_grpCache proxyCache(CacheId);
-
-    CthAwaken(proxyCache.ckLocalBranch()->threadCache[iRank]);
-    }
-
-    
-MdlCacheMsg *
-grpCache::waitCache(int iRank) 
-{
-    MdlCacheMsg * msgTmp;
-    
-    CmiLock(lock);		// Avoid contention with CacheReply()
-    if(msgCache[iRank]) {
-	msgTmp = msgCache[iRank];
-	msgCache[iRank] = NULL;
-	CmiUnlock(lock);	
-	return msgTmp;
-	}
-    else {
-	threadCache[iRank] = CthSelf();
-	CmiUnlock(lock);	
-	CthSuspend();
-	}
-    assert(msgCache[iRank] != NULL);
-    threadCache[iRank] = 0;
-    msgTmp = msgCache[iRank];
-    msgCache[iRank] = NULL;
-    return msgTmp;
+    cbCache->send(mesg);
     }
 
 void
@@ -1092,14 +1023,6 @@ grpCache::CacheInitialize(int cid,void *pData,int iDataSize,int nData,
 
     CmiLock(lock);		// single thread at a time
 
-    if(msgCache == NULL) {	// Initialization
-	msgCache = new MdlCacheMsg*[nElem];
-	threadCache = new CthThreadStruct*[nElem];
-	for(i = 0; i < nElem; i++) {
-	    msgCache[i] = NULL;
-	    threadCache[i] = 0;
-	    }
-	}
     /*
      ** Allocate more cache spaces if required!
      */
@@ -1545,6 +1468,8 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 
 	    // CkArrayIndex1D aidxId(id);
 
+	    mdl->pSelf->cbCache = new CkCallback(CkCallback::resumeThread);
+	    
 	    proxyCache[CkNodeOf(peId)].CacheRequest(mesg);
 	    ++c->nMiss;
 	    }
@@ -1655,9 +1580,10 @@ GotVictim:
 	char *pszLine;
 	MdlCacheMsg *mesg;
 	if(!bLocalFetch) {
-	    mesg = proxyCache.ckLocalBranch()->waitCache(mdl->pSelf->iMyRank);
+	    mesg = (MdlCacheMsg *)(mdl->pSelf->cbCache)->thread_delay();
 	    assert(mesg->ch.id == id);
 	    assert(mesg->ch.cid == cid);
+	    delete mdl->pSelf->cbCache;
 
 	    pszLine = mesg->pszBuf;
 	    }
