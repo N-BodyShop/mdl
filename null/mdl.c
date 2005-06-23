@@ -274,8 +274,8 @@ int mdlSelf(MDL mdl)
  ** of the others memory, however he will have successfully transfered all
  ** of his memory.
  */
-int mdlSwap(MDL mdl,int id,int nBufBytes,void *vBuf,int nOutBytes,
-			int *pnSndBytes,int *pnRcvBytes)
+int mdlSwap(MDL mdl,int id,size_t nBufBytes,void *vBuf,size_t nOutBytes,
+			size_t *pnSndBytes,size_t *pnRcvBytes)
 {
 	assert(0);
 	return 0;
