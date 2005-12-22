@@ -81,7 +81,7 @@ class MdlCacheFlshMsg : public CMessage_MdlCacheFlshMsg
     };
 
 extern "C"
-void MPI_Main(int argc, char **);
+void AMPI_Main(int argc, char **);
 
 class Main : public Chare
 {

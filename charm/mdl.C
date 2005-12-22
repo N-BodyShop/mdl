@@ -324,7 +324,7 @@ Main::startMain()
       char **argv = CkGetArgv();
 
 
-      MPI_Main(argc, argv);
+      AMPI_Main(argc, argv);
 };
 
 void
