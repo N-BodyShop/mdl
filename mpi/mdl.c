@@ -18,6 +18,7 @@
 #define MDL_NOCACHE			0
 #define MDL_ROCACHE			1
 #define MDL_COCACHE			2
+#define MDL_DUMCACHE        3
 
 #define MDL_DEFAULT_BYTES		80000
 #define MDL_DEFAULT_SERVICES	50
@@ -30,6 +31,10 @@
 #define MDL_TAG_REQ	   		4
 #define MDL_TAG_RPL			5
 
+
+double mdlVersion(MDL mdl) {
+     return MDL_VERSION_NUMBER;
+}
 
 /*
  ** This structure should be "maximally" aligned, with 4 ints it
@@ -198,6 +203,15 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
 	for (i=0;i<mdl->nMaxCacheIds;++i) {
 		mdl->cache[i].iType = MDL_NOCACHE;
 		}
+
+    /*
+    ** Initialize work spaces. --JPG
+    */
+    mdl->work.cWorkList = NULL;
+    mdl->work.iNextLocalElt = -1;
+    mdl->work.iNextRemoteElt = -1;
+    mdl->work.nLocalWorkRemaining = -1;
+    mdl->work.idScheduler = -1;
 
 	for(argc = 0; argv[argc]; argc++);
 
@@ -601,6 +615,15 @@ void mdlHandler(MDL mdl)
 #define MDL_CHECK_MASK  	0x7f
 #define BILLION				1000000000
 
+/*
+ * Calling mdlCacheReceive presupposed that you already have posted an MPI_Irecv 
+ * with handle mdl->ReqRcv, data going into the buffer mdl->pszRcv (which is
+ * of size mdl->iCaBufSize), and tag MDL_TAG_CACHECOM.
+ * Initially, mdl->pszRcv is just the size of CAHEAD.  Once a cache is initialized,
+ * however, it is realloced (in AdjustDataSize) to the size of 
+ * CAHEAD + the size of an MDL cache line. 
+ */
+
 int mdlCacheReceive(MDL mdl,char *pLine)
 {
 	CACHE *c;
@@ -611,11 +634,11 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 	char *t;
 	int id, iTag;
 	int n,i;
-	MPI_Status status;
 	int ret;
 	int iLineSize;
 	int iDataSize;
-#if 0
+	MPI_Status status;
+#if (0)
 	char achDiag[256];
 #endif
 
@@ -640,6 +663,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		ret = 0;
 		break;
 	case MDL_MID_CACHEREQ:
+        assert(c->iType != MDL_DUMCACHE);
 		/*
 		 ** This is the tricky part! Here is where the real deadlock
 		 ** difficulties surface. Making sure to have one buffer per
@@ -683,6 +707,7 @@ int mdlCacheReceive(MDL mdl,char *pLine)
 		ret = 0;
 		break;
 	case MDL_MID_CACHERPL:
+        assert(c->iType != MDL_DUMCACHE);
 		/*
 		 ** For now assume no prefetching!
 		 ** This means that this WILL be the reply to this Aquire
@@ -798,13 +823,209 @@ void AdjustDataSize(MDL mdl)
  */
 void *mdlMalloc(MDL mdl,size_t iSize)
 {	
-	return(malloc(iSize));
-	}
+     if (iSize > 0)
+	  return(malloc(iSize));
+     return NULL;
+}
+
+/* mdlMallocs and returns the max size malloced on all threads.*/
+void *mdlMallocMax(MDL mdl, size_t iSize, int *iMaxSize)
+{
+     int *iSizes, iMax, i;
+
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     MPI_Allgather(&iSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     assert(iSizes[mdl->idSelf] == iSize);
+     iMax = iSize;
+     for (i=0;i<mdl->nThreads;++i) if (iSizes[i] > iMax) iMax = iSizes[i];
+     *iMaxSize = iMax;
+     free(iSizes);
+     if (iSize > 0)
+	  return(malloc(iSize));
+     return NULL;
+}
+
+/* 
+** Requests an mdlMalloc of an array that is at least nThreads*iSize long.
+** The *actual* size of the allocation on every PE is the largest iSize called
+** by any PE.  This is returned in iEltSize.
+*/
+void *mdlMallocShared(MDL mdl, size_t stSize, int *iEltSize)
+{
+     int *iSizes, iSize, iMaxSize, i;
+
+     iSize = (int)stSize;
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     MPI_Allgather(&iSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     assert(iSizes[mdl->idSelf] == iSize);
+     iMaxSize = iSize;
+     for (i=0;i<mdl->nThreads;++i) if (iSizes[i] > iMaxSize) iMaxSize = iSizes[i];
+     free(iSizes);
+     *iEltSize = iMaxSize;
+     if (iSize > 0)
+	  return(malloc(mdl->nThreads*iMaxSize));
+     return NULL;
+}
 
 void mdlFree(MDL mdl,void *p)
 {
 	free(p);
 	}
+
+
+int mdlComputeEltSizeFromType(MDL mdl, int iType)
+{
+    /* Figure out number of bytes to copy */
+    switch (iType) {
+    case MDL_TYPE_INT:
+        return sizeof(int);
+    case MDL_TYPE_LONG:
+        return sizeof(long);
+    case MDL_TYPE_SHORT:
+        return sizeof(short);
+    case MDL_TYPE_UNSIGNED_SHORT:
+        return sizeof(unsigned short);
+    case MDL_TYPE_UNSIGNED:
+        return sizeof(unsigned);
+    case MDL_TYPE_UNSIGNED_LONG:
+        return sizeof(unsigned long);
+    case MDL_TYPE_FLOAT:
+        return sizeof(float);
+    case MDL_TYPE_DOUBLE:
+        return sizeof(double);
+    case MDL_TYPE_LONG_DOUBLE:
+        return sizeof(long double);
+    case MDL_TYPE_BYTE:
+        return sizeof(char);
+    default:
+        assert(1);
+    }
+    return -1;
+}
+
+
+/* Returns the MPI_Datatype of an MDL datatype */
+MPI_Datatype mdlMpiDatatypeFromType(MDL mdl, int iType)
+{
+    switch (iType) {
+    case MDL_TYPE_INT:
+        return MPI_INT;
+    case MDL_TYPE_LONG:
+        return MPI_LONG;
+    case MDL_TYPE_SHORT:
+        return MPI_SHORT;
+    case MDL_TYPE_UNSIGNED_SHORT:
+        return MPI_UNSIGNED_SHORT;
+    case MDL_TYPE_UNSIGNED:
+        return MPI_UNSIGNED;
+    case MDL_TYPE_UNSIGNED_LONG:
+        return MPI_UNSIGNED_LONG;
+    case MDL_TYPE_FLOAT:
+        return MPI_FLOAT;
+    case MDL_TYPE_DOUBLE:
+        return MPI_DOUBLE;
+    case MDL_TYPE_LONG_DOUBLE:
+        return MPI_LONG_DOUBLE;
+    case MDL_TYPE_BYTE:
+        return MPI_BYTE;
+    default:
+        assert(1);
+    }
+    return MPI_BYTE;
+}
+
+MPI_Op mdlMpiOpFromReduce(MDL mdl, int iReduce)
+{
+    switch (iReduce) {
+    case MDL_REDUCE_MAX:
+        return MPI_MAX;
+    case MDL_REDUCE_MIN:
+        return MPI_MIN;
+    case MDL_REDUCE_SUM:
+        return MPI_SUM;
+    case MDL_REDUCE_PROD:
+        return MPI_PROD;
+    case MDL_REDUCE_LAND:
+        return MPI_LAND;
+    case MDL_REDUCE_BAND:
+        return MPI_BAND;
+    case MDL_REDUCE_LOR:
+        return MPI_LOR;
+    case MDL_REDUCE_LXOR:
+        return MPI_LXOR;
+    case MDL_REDUCE_MAXLOC:
+        return MPI_MAXLOC;
+    case MDL_REDUCE_MINLOC:
+        return MPI_MINLOC;
+    default:
+        assert(1);
+    }
+    return MPI_SUM;
+}
+
+/*
+** Does an MPI_Allgather on array *parray.  iEltSize (which is
+** also is the iEltSize that was returned from mdlMallocShared) is
+** the size of a single thread's space in bytes.
+*/
+void mdlCollectShared(MDL mdl, void *parray, int iEltSize)
+{
+     int *iSizes, i;
+     char *array = parray;
+
+     /* Make sure that all iEltSizes are the same on all threads */
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
+     free(iSizes);
+
+     /* Now gather the actual array */
+     /* Note to self: I am not 100% positive that the source array can
+      * be the same as this PE's piece of the destination array, even though
+      * in principle MPI should be smart enough not to touch it. */
+     MPI_Allgather(&(array[(mdl->idSelf)*iEltSize]), iEltSize, MPI_BYTE, array,
+		   iEltSize, MPI_BYTE, MPI_COMM_WORLD);
+     return;
+}
+
+void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
+                  void *pReceiveArray, int iEltSize, int nElements)
+{
+    int *iSizes, i;
+    
+    mdlassert(mdl, iEltSize == mdlComputeEltSizeFromType(mdl, iType));
+    /* Make sure that nElements are the same on all threads */
+    iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+    MPI_Allgather(&nElements, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+    for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==nElements);
+    free(iSizes);
+
+    /* Now do the reduction */
+    MPI_Allreduce(pSendArray, pReceiveArray, nElements, mdlMpiDatatypeFromType(mdl, iType),
+                  mdlMpiOpFromReduce(mdl, iReduce), MPI_COMM_WORLD);
+}
+
+
+/* Similar to mdlCollectShared except that it does an MPI_Alltoall from
+ * *poutarray into *pinarray */
+void mdlAllToAll(MDL mdl, void *pScatterArray, void *pGatherArray, int iEltSize)
+{
+     int *iSizes, i;
+     char *outarray = pScatterArray;
+     char *inarray = pGatherArray;
+
+     /* Make sure that all iEltSizes are the same on all threads */
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
+     free(iSizes);
+
+     /* Now to the all-to-all */
+     MPI_Alltoall(outarray, iEltSize, MPI_BYTE, inarray, iEltSize, MPI_BYTE,
+                  MPI_COMM_WORLD);
+}
+
+
 
 /*
  ** Common initialization for all types of caches.
@@ -860,6 +1081,9 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->nData = nData;
 	c->iLineSize = MDL_CACHELINE_ELTS*c->iDataSize;
 	c->iKeyShift = 0;
+    /* If this is a "dummy" cache, skip to the end */
+    if (nData == -1) goto InitDummyCache;
+        
 	while((1 << c->iKeyShift) < mdl->nThreads) ++c->iKeyShift;
 	c->iIdMask = (1 << c->iKeyShift) - 1;
 	
@@ -921,6 +1145,8 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	 */
 	c->pLine = malloc(c->nLines*c->iLineSize);
 	assert(c->pLine != NULL);
+
+ InitDummyCache:
 	c->nCheckOut = 0;
 	/*
 	 ** Set up the request message as much as possible!
@@ -1044,6 +1270,77 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	MPI_Barrier(MPI_COMM_WORLD);
 	}
 
+/*
+ ** Initialize a "Dummy" caching space used only for synchronizes.
+ */
+void mdlDUMcache(MDL mdl,int cid)
+{
+	CACHE *c;
+	int id;
+	CAHEAD caIn;
+	char achDiag[256];
+	MPI_Status status;
+	int ret;
+    /* Set these to "dummy" values */
+    void *pData = NULL;
+    int iDataSize = 0;
+    int nData = -1;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+	c->iType = MDL_DUMCACHE;
+	/*
+	 ** For a DUMcache these two functions are not needed.
+	 */
+	c->init = NULL;
+	c->combine = NULL;
+	sprintf(achDiag, "%d: before CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
+	/*
+	 ** THIS IS A SYNCHRONIZE!!!
+	 */
+	caIn.cid = cid;
+	caIn.mid = MDL_MID_CACHEIN;
+	caIn.id = mdl->idSelf;
+	if(mdl->idSelf == 0) {
+	    c->nCheckIn = 1;
+	    while(c->nCheckIn < mdl->nThreads) {
+		  ret = MPI_Wait(&mdl->ReqRcv, &status);
+		  assert(ret == MPI_SUCCESS);
+		  mdlCacheReceive(mdl, NULL);
+	    }
+	}
+	else {
+		/*
+		 ** Must use non-blocking sends here, we will never wait
+		 ** for these sends to complete, but will know for sure
+		 ** that they have completed.
+		 */
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, 0,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		}
+	sprintf(achDiag, "%d: In CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
+	if(mdl->idSelf == 0) {
+	    for(id = 1; id < mdl->nThreads; id++) {
+		MPI_Send(&caIn,sizeof(CAHEAD),MPI_BYTE, id,
+			       MDL_TAG_CACHECOM, MPI_COMM_WORLD);
+		}
+	    }
+	else {
+	    c->nCheckIn = 0;
+	    while (c->nCheckIn == 0) {
+		  ret = MPI_Wait(&mdl->ReqRcv, &status);
+		  assert(ret == MPI_SUCCESS);
+		  mdlCacheReceive(mdl,NULL);
+		}	
+	    }	
+	sprintf(achDiag, "%d: After CI, cache %d\n", mdl->idSelf, cid);
+	mdlDiag(mdl, achDiag);
+	AdjustDataSize(mdl);
+	MPI_Barrier(MPI_COMM_WORLD);
+	}
+
+
 void mdlFinishCache(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
@@ -1058,6 +1355,10 @@ void mdlFinishCache(MDL mdl,int cid)
 	MPI_Request reqFlsh;
 	MPI_Request reqBoth[2];
 	int index;
+
+	/* Now we can call mdlFinishCache even if we don't know
+	 * if the cache is actually active. */
+	if (c->iType == MDL_NOCACHE) return;
 
 	if (c->iType == MDL_COCACHE) {
 		/*
@@ -1158,10 +1459,12 @@ void mdlFinishCache(MDL mdl,int cid)
 	/*
 	 ** Free up storage and finish.
 	 */
-	free(c->pTrans);
-	free(c->pTag);
-	free(c->pbKey);
-	free(c->pLine);
+    if (c->iType != MDL_DUMCACHE) {
+        free(c->pTrans);
+        free(c->pTag);
+        free(c->pbKey);
+        free(c->pLine);
+    }
 	c->iType = MDL_NOCACHE;
 	  
 	AdjustDataSize(mdl);
@@ -1199,12 +1502,20 @@ void mdlCacheCheck(MDL mdl)
     MPI_Status status;
 
     while (1) {
-	MPI_Test(&mdl->ReqRcv, &flag, &status);
-	if(flag == 0)
-	    break;
-	mdlCacheReceive(mdl,NULL);
+        MPI_Test(&mdl->ReqRcv, &flag, &status);
+        if(flag == 0)
+            break;
+        mdlCacheReceive(mdl,NULL);
+    }
+    /* Also check scheduler requests */
+    if (mdl->work.idScheduler != -1) {
+        while (1) {
+            MPI_Test(&(mdl->work.handleRcv), &flag, &status);
+            if (flag == 0) break;
+            mdlWorkReceive(mdl,NULL);
         }
     }
+}
 
 
 void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
@@ -1371,13 +1682,13 @@ GotVictim:
 	 ** data requested from processor 'id'.
 	 */
 	while (1) {
-	  if(mdlCacheReceive(mdl,pLine)) {
-		      if(caFlsh)
-			    MPI_Wait(&reqFlsh, &status);
-		      return(&pLine[iElt*c->iDataSize]);
-		      }
+		if(mdlCacheReceive(mdl,pLine)) {
+			if(caFlsh)
+				MPI_Wait(&reqFlsh, &status);
+			return(&pLine[iElt*c->iDataSize]);
 		}
 	}
+}
 
 void mdlRelease(MDL mdl,int cid,void *p)
 {
@@ -1436,3 +1747,867 @@ double mdlMinRatio(MDL mdl,int cid)
 	else return(0.0);
 	}
 
+
+/* 
+ * Priority queue, using a binary heap with static maximum size.
+ * This code was originally posted by Rene Wiermer, rwiermer@googlemail.com,
+ * and then modified for use in MDL.
+ *
+ * The implemementation is based on Heapsort as described in
+ * "Introduction to Algorithms" (Cormen, Leiserson, Rivest, 24. printing)
+ */
+
+int mdlHeap_isEmpty(PacketHeap *h) {
+	return h->size==0;
+}
+
+int mdlHeap_isFull(PacketHeap *h) {
+	return h->size>=MDL_PQHEAP_SIZE;
+}
+
+void heap_heapify(PacketHeap* h,int i) {
+	int l,r,smallest;
+	Packet tmp;
+	l=2*i; /*left child*/
+	r=2*i+1; /*right child*/
+
+	if ((l < h->size)&&(h->packets[l].priority < h->packets[i].priority))
+		smallest=l;
+	else 
+		smallest=i;
+	if ((r < h->size)&&(h->packets[r].priority < h->packets[smallest].priority))
+		smallest=r;
+	if (smallest!=i) {
+		/*exchange to maintain heap property*/
+		tmp=h->packets[smallest];
+		h->packets[smallest]=h->packets[i];
+		h->packets[i]=tmp;
+		heap_heapify(h,smallest);
+	}
+}
+
+
+void mdlHeap_init(PacketHeap* h) {
+	h->size=0;
+}
+
+void mdlHeap_addItem(PacketHeap* h,Packet packet) {
+	unsigned int i,parent;	
+	h->size=h->size+1;
+    assert(h->size <= MDL_PQHEAP_SIZE);
+	i=h->size-1;
+	parent=i/2;
+	/*find the correct place to insert*/
+	while ((i > 0)&&(h->packets[parent].priority > packet.priority)) {
+		h->packets[i]=h->packets[parent];
+		i=parent;
+		parent=i/2;
+	}
+	h->packets[i]=packet;
+}
+
+Packet mdlHeap_extractMin(PacketHeap* h) {
+	Packet pmax;
+	if (mdlHeap_isEmpty(h)) {
+        pmax.priority = -9;
+        pmax.data = -9;
+        return pmax;
+    }
+	pmax=h->packets[0];
+	h->packets[0]=h->packets[h->size-1];
+	h->size=h->size-1;
+	heap_heapify(h,0);
+	return pmax;
+}
+
+
+/*
+** New MDL Work management functions
+*/
+
+#define MDL_TAG_WORKCOMM     20
+#define MDL_TAG_WORKRESPONSE 21
+#define MDL_WORK_ERROR    -1
+#define MDL_WORK_NULL     0
+#define MDL_WORK_CHECKIN  1
+#define MDL_WORK_CHECKOUT 2
+#define MDL_WORK_REQUEST  3
+#define MDL_WORK_ASSIGN   4
+#define MDL_WORK_QUERY    5
+#define MDL_WORK_NOWORK   6
+#define MDL_WORK_UPDATE   7
+
+#define MDL_WORK_UNITS_PER_REQ  3
+#define MDL_WORK_UNITS_PREFETCH 1
+
+#define MDL_MIN(a,b)  ((a) < (b)? (a) : (b))
+
+
+/* Copies work units into buffer wDataOut, adjusts w->nLocalWorkRemaining and iNextRemoteElt.
+ * Returns the number of work units actually buffered */
+int mdlCreateWorkResponseBuffer(MDL mdl, char *wDataOut)
+{
+    int iRemoteHead; /* Element that forms the 0th element for outgoing message */
+    int nWorkUnits = MDL_MIN(mdl->work.nLocalWorkRemaining, MDL_WORK_UNITS_PER_REQ);
+
+    /* Decrement the local work remaining counter */
+    mdl->work.nLocalWorkRemaining -= nWorkUnits;
+    assert(mdl->work.nLocalWorkRemaining >= 0);
+    /* Move iNextRemoteElt */
+    mdl->work.iNextRemoteElt -= MDL_WORK_UNITS_PER_REQ;
+    assert(mdl->work.iNextRemoteElt >= 0);
+    iRemoteHead = mdl->work.iNextRemoteElt + 1;
+
+    /* Copy work spec to outgoing buffer */
+    memcpy(wDataOut, &(mdl->work.cWorkList[(iRemoteHead)*(mdl->work.iWorkEltSize)]),
+           mdl->work.iWorkEltSize*nWorkUnits);
+    return nWorkUnits;
+}
+    
+
+/* Returns the ID of the thread that has a valid work unit
+ * that can be assigned.  Returns -1 if there are no more
+ * work units to be assigned.  If return>=0, the work specification
+ * is placed in the location pWorkSpec.  whOrigReq is the WORKHEAD
+ * from the message of the original work request.  This routine also
+ * modifies the priority queue and keeps it up to date.*/
+int mdlFindNextWork(MDL mdl, WORKHEAD *whOrigReq, char *pWorkSpec, int *pnWorkUnits)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD *whIn, whOut;
+    char *pbufRcv; /* We need a local receive buffer*/
+    char *wDataIn;
+    SCHEDULE *s = &(mdl->sch);
+    PacketHeap *pHeap = &(s->pWorkRemainingHeap);
+    Packet p;
+    int iPE, iResponse, flag;
+    int nWorkUnits = 0;
+    MPI_Request handleRcv;
+    MPI_Status status;
+
+    assert(s->bIAmScheduler);
+    assert(w->idScheduler == mdl->idSelf);
+
+    pbufRcv = (char *) malloc(w->iBufSize);
+    assert(pbufRcv != NULL);
+    whIn = (WORKHEAD *) pbufRcv;
+    wDataIn = (pbufRcv) + sizeof(WORKHEAD);
+    
+    /* This while loops finds the next valid element in the 
+     * priority queue, then asks the resulting thread for work.
+     * If the thread responds that it has no work remaining,
+     * then we repeat.  If we make it all the way through the
+     *  priority queue, return -1. */
+    iResponse = MDL_WORK_NOWORK;
+    while (iResponse == MDL_WORK_NOWORK) {
+        /* First, we find a valid priority queue element */
+        while( !mdlHeap_isEmpty(pHeap) ) {
+            p = mdlHeap_extractMin(pHeap);
+            /* Check if the copy in the PQ is the most recent copy, and
+             * that it's more than MDL_WORK_UNITS_PER_REQ */
+            if (s->iWorkRemainingList[p.data] == (-1 * p.priority) &&
+                p.priority < -MDL_WORK_UNITS_PER_REQ) {
+                /* This is a valid element */
+                if (p.data != mdl->idSelf) /* On another thread */
+                    goto FoundValidWork;
+                else /* On the scheduler thread */
+                    goto FoundValidLocalWork;
+            }
+        }
+        /* If it got here, priority queue is empty */
+        iPE = -1;
+        goto FinishFindNextWork;
+        
+    FoundValidWork:
+        /* Now we need to query the processor that has this work to see
+         * if it still has work availible. */
+        iPE = p.data; /* iPE is the thread that we think has work availible */
+        whOut.rid = whOrigReq->rid;
+        whOut.oid = whOrigReq->oid;
+        whOut.id  = mdl->idSelf;
+        whOut.nLocalWorkRemaining = w->nLocalWorkRemaining;
+        whOut.iMessage = MDL_WORK_QUERY;
+        mdlprintf(mdl,"Thread %d should still have work remaining...sending request.\n",
+                iPE);
+        /*fprintf(stderr,"Thread %d should still have work remaining...sending request.\n",
+	          iPE);*/
+        MPI_Send(&whOut, sizeof(WORKHEAD), MPI_BYTE, iPE, MDL_TAG_WORKCOMM,
+                 MPI_COMM_WORLD);
+        /* Post receive for the eventual reply */
+        MPI_Irecv(pbufRcv, w->iBufSize, MPI_BYTE, iPE, MDL_TAG_WORKRESPONSE,
+                  MPI_COMM_WORLD, &handleRcv);
+        /*MPI_Recv(pbufRcv, w->iBufSize, MPI_BYTE, iPE, MDL_TAG_WORKRESPONSE,
+   	           MPI_COMM_WORLD, &status); */
+        /* Do cache receives until we actually get the reply */
+        flag = 0;
+        while (!flag) {
+            MPI_Test(&mdl->ReqRcv, &flag, &status);
+            if (flag != 0) mdlCacheReceive(mdl,NULL);
+            MPI_Test(&handleRcv, &flag, &status);
+        }
+        iResponse = whIn->iMessage;
+        assert(whIn->rid == whOrigReq->rid);
+        assert(whIn->oid == whOrigReq->oid);
+        /* Regardless of response, update iWorkRemainingList */
+        s->iWorkRemainingList[iPE] = whIn->nLocalWorkRemaining;
+        mdlprintf(mdl,"Received response %d from thread %d.\n",
+                iResponse,iPE);
+        /*fprintf(stderr,"Received response %d from thread %d.\n",
+	          iResponse,iPE);*/
+    }
+
+    /* Thread iPE has given us some work! */
+    /* Update the priority queue */
+    p.data = iPE;
+    p.priority = (-1) * whIn->nLocalWorkRemaining;
+    mdlHeap_addItem(pHeap, p);
+
+    /*  Copy this into the proper
+     * buffer and return */
+    nWorkUnits = whIn->nWorkUnits;
+    assert(nWorkUnits <= MDL_WORK_UNITS_PER_REQ);
+    memcpy(pWorkSpec, wDataIn, w->iWorkEltSize*nWorkUnits);
+    goto FinishFindNextWork;
+
+ FoundValidLocalWork:
+    assert(p.data == mdl->idSelf);
+    assert(mdl->work.nLocalWorkRemaining >= MDL_WORK_UNITS_PER_REQ);
+    iPE = mdl->idSelf;
+    /* Copy to output buffer */
+    nWorkUnits = mdlCreateWorkResponseBuffer(mdl, pWorkSpec);
+    /* Update workremaininglist and priority queue */
+    s->iWorkRemainingList[iPE] = w->nLocalWorkRemaining;
+    /* If there is still work left, add to the priority queue. */
+    if (mdl->work.nLocalWorkRemaining) {
+      assert(mdl->work.iNextLocalElt <= mdl->work.iNextRemoteElt);
+      p.data = iPE;
+      p.priority = (-1) * w->nLocalWorkRemaining;
+      mdlHeap_addItem(pHeap, p);
+    }
+    /*fprintf(stderr,"%d: mdlFindNextWork: iNextLocalElt=%d  iNextRemoteElt=%d, nLocalWorkRemaining: %d\n",
+    	    mdl->idSelf, mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt,
+    	    mdl->work.nLocalWorkRemaining); */
+    
+
+ FinishFindNextWork:
+    free(pbufRcv);
+    *pnWorkUnits = nWorkUnits;
+    return iPE;
+}
+
+
+/*
+** Like mdlCacheReceive but for work management messages.  This
+** routine assumes that there has been an MPI_Irecv posted for handle
+** mdl->work.handleRcv with receive buffer mdl->work->pbufRcv,
+** and that the presence of a message has been verified (by
+** MPI_Wait or similar).
+*/
+int mdlWorkReceive(MDL mdl, char *pWork)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD *whIn, *whOut, *whIOut;
+    char *wDataIn, *wDataOut, *wIDataOut;
+    int nWorkUnitsOut;
+    SCHEDULE *s = &(mdl->sch);
+    int ret, iPE;
+    PacketHeap *pHeap = &(s->pWorkRemainingHeap);
+    Packet p;
+    MPI_Status status;
+    int flag;
+
+    whIn = (WORKHEAD *) w->pbufRcv;
+    wDataIn = (w->pbufRcv) + sizeof(WORKHEAD);
+    whOut = (WORKHEAD *) w->pbufSnd;
+    wDataOut = (w->pbufSnd) + sizeof(WORKHEAD);
+    whIOut = (WORKHEAD *) w->pbufISnd;
+    wIDataOut = (w->pbufISnd) + sizeof(WORKHEAD);
+
+    switch (whIn->iMessage) {
+    case MDL_WORK_CHECKIN:
+        assert(s->bIAmScheduler);
+        ++(s->nCheckIn);
+        s->iWorkRemainingList[whIn->id] = whIn->nLocalWorkRemaining;
+        ret = MDL_WORK_CHECKIN;
+        break;
+    case MDL_WORK_CHECKOUT:
+        assert(s->bIAmScheduler);
+        ++(s->nCheckOut);
+        assert(whIn->nLocalWorkRemaining == 0);
+        ret = MDL_WORK_CHECKOUT;
+        break;
+    case MDL_WORK_QUERY:
+        /* A query from the scheduler for work.  Respond using Isend */
+        assert(!s->bIAmScheduler);
+        MPI_Test(&(w->handleISnd), &flag, &status);
+        if (!flag) {
+            /* Previous request did not complete */
+            fprintf(stderr,"%d: MPI_Isend did not complete, yet!  Waiting to respond to work query.\n",
+                    mdl->idSelf);
+            MPI_Wait(&(w->handleISnd), &status);
+        }
+        whIOut->rid = whIn->rid;
+        whIOut->oid = whIn->oid;
+        whIOut->id  = mdl->idSelf;
+        mdlprintf(mdl,"%d: Received work query from master regarding request %d from thread %d...\n",
+                  mdl->idSelf, whIn->rid, whIn->oid);
+        /*fprintf(stderr,"%d: Received work query from master regarding request %d from thread %d...\n",
+	          mdl->idSelf, whIn->rid, whIn->oid);*/
+        /* This is the condition that signals there is no work left to do */
+        if (mdl->work.iNextLocalElt+(MDL_WORK_UNITS_PER_REQ-1) > mdl->work.iNextRemoteElt) {
+            assert(w->nLocalWorkRemaining < MDL_WORK_UNITS_PER_REQ);
+            /* Tell scheduler there is not enough local work left */
+            whIOut->nLocalWorkRemaining = w->nLocalWorkRemaining;
+            whIOut->iMessage = MDL_WORK_NOWORK;
+            whIOut->nWorkUnits = 0;
+            mdlDiag(mdl,"Sending response NOWORK\n");
+            /*fprintf(stderr,"Sending response NOWORK\n");*/
+            MPI_Isend(whIOut, sizeof(WORKHEAD), MPI_BYTE, whIn->id,
+                     MDL_TAG_WORKRESPONSE, MPI_COMM_WORLD, &(w->handleISnd));
+        } else {
+            assert(w->nLocalWorkRemaining >= MDL_WORK_UNITS_PER_REQ);
+            /* Construct rest of message header */
+            whIOut->nLocalWorkRemaining = w->nLocalWorkRemaining;
+            whIOut->iMessage = MDL_WORK_ASSIGN;
+            /* Copy work spec to outgoing buffer */
+            whIOut->nWorkUnits = mdlCreateWorkResponseBuffer(mdl, wIDataOut);
+            mdlprintf(mdl,"Sending response ASSIGN with %d work units\n",whIOut->nWorkUnits);
+            /*fprintf(stderr,"Sending response ASSIGN\n");*/
+            MPI_Isend(whIOut, w->iBufSize, MPI_BYTE, whIn->id,
+                      MDL_TAG_WORKRESPONSE, MPI_COMM_WORLD, &(w->handleISnd));
+        }
+        ret = MDL_WORK_QUERY;
+        break;
+    case MDL_WORK_REQUEST:
+        assert(s->bIAmScheduler);
+        assert(whIn->oid == whIn->id);
+        assert(whIn->nLocalWorkRemaining <= MDL_WORK_UNITS_PER_REQ);
+        /* First, we update iWorkRemainingList */
+        s->iWorkRemainingList[whIn->id] = 0;
+        s->iWorkRemainingList[mdl->idSelf] = w->nLocalWorkRemaining;
+        mdlprintf(mdl,"Received work request ID %d from thread %d\n",whIn->rid, whIn->id);
+        /*fprintf(stderr,"Scheduler received work request ID %d from thread %d\n",whIn->rid, whIn->id);*/
+        /* Pop the next element off of the priority queue (checking
+         * to make sure it has not been updated) */
+        MPI_Test(&(w->handleISnd), &flag, &status);
+        if (!flag) {
+            /* Previous request did not complete */
+            fprintf(stderr,"%d: MPI_Isend did not complete, yet!  Waiting to find next work.\n",
+                    mdl->idSelf);
+            MPI_Wait(&(w->handleISnd), &status);
+        }
+        /* mdlFindNextWork loads up wIDataOut with nWorkUnitsOut units of for from PE "iPE".
+         * If iPE<0, then there is no more work for anyone. */
+        iPE = mdlFindNextWork(mdl, whIn, wIDataOut, &nWorkUnitsOut);
+        mdlprintf(mdl,"mdlFindNextWork found work from thread %d for thread %d (rid=%d, nWorkUnits=%d)\n",
+                iPE, whIn->id, whIn->rid, nWorkUnitsOut);
+        /*fprintf(stderr,"mdlFindNextWork found work from thread %d for thread %d (rid=%d)\n",
+	          iPE, whIn->id, whIn->rid);*/
+        if (iPE < 0) { /* No more work left.  Tell thread to checkout. */
+            whIOut->rid = whIn->rid;
+            whIOut->oid = whIn->oid;
+            whIOut->id  = mdl->idSelf;
+            whIOut->nLocalWorkRemaining = 0;
+            assert(s->nCheckOut);
+            whIOut->iMessage = MDL_WORK_NOWORK;
+            whIOut->nWorkUnits = 0;
+            mdlprintf(mdl,"Sending NOWORK to thread %d\n",whIn->id);
+            /*fprintf(stderr,"Scheduler Sending NOWORK to thread %d\n",whIn->id);*/
+            MPI_Isend(whIOut, sizeof(WORKHEAD), MPI_BYTE, whIn->id,
+                     MDL_TAG_WORKCOMM, MPI_COMM_WORLD, &(w->handleISnd));
+        } else { /* Respond to thread with work assignment. */
+            whIOut->rid = whIn->rid;
+            whIOut->oid = whIn->oid;
+            whIOut->id  = mdl->idSelf;
+            whIOut->nWorkUnits = nWorkUnitsOut;
+            whIOut->nLocalWorkRemaining = 0;
+            whIOut->iMessage = MDL_WORK_ASSIGN;
+            MPI_Isend(whIOut, w->iBufSize, MPI_BYTE, whIn->id,
+                     MDL_TAG_WORKCOMM, MPI_COMM_WORLD, &(w->handleISnd));
+        }
+        ret = MDL_WORK_REQUEST;
+        break;
+    case MDL_WORK_UPDATE:
+        assert(s->bIAmScheduler);
+        /* Update iWorkRemainingList */
+        s->iWorkRemainingList[whIn->id] = whIn->nLocalWorkRemaining;
+        mdlprintf(mdl,"Received work update from thread %d. Work remaining: %d\n",
+                  whIn->id, whIn->nLocalWorkRemaining);
+        /* Update the priority queue */
+        p.data = whIn->oid;
+        p.priority = (-1) * whIn->nLocalWorkRemaining;
+        mdlHeap_addItem(pHeap, p);
+        ret = MDL_WORK_UPDATE;
+        break;
+    case MDL_WORK_NOWORK:
+        assert(!(s->bIAmScheduler));
+        w->retIncomingWork = MDL_WORK_NOWORK;
+        ret = MDL_WORK_NOWORK;
+        break;
+    case MDL_WORK_ASSIGN:
+        assert(!(s->bIAmScheduler));
+        w->retIncomingWork = MDL_WORK_ASSIGN;
+        /* Copy work assignment to incoming work buffer */
+        w->nbufIncomingWork = whIn->nWorkUnits;
+        memcpy(w->pbufIncomingWork, wDataIn, w->iWorkEltSize * w->nbufIncomingWork);
+        ret = MDL_WORK_ASSIGN;
+        break;
+    default:
+        mdlprintf(mdl, "ERROR: received message %d from thread %d (rid=%d, oid=%d)!\n",
+                  whIn->iMessage, whIn->id, whIn->rid, whIn->oid);
+        mdlassert(mdl, 0);
+    }
+
+    /*
+    ** Post next receive
+    */
+    MPI_Irecv(w->pbufRcv, w->iBufSize, MPI_BYTE, MPI_ANY_SOURCE,
+              MDL_TAG_WORKCOMM, MPI_COMM_WORLD, &(w->handleRcv));
+
+    return ret;
+}
+
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD wh;
+    int ret, i;
+    MPI_Status status;
+
+    if (mdl->work.cWorkList != NULL || mdl->work.idScheduler != -1){
+        mdlprintf(mdl, "mdlInitWork called after workspace already initialized!\n");
+        assert(0);
+    }
+
+    mdl->work.cWorkList           = (char *) pWorkList;
+    mdl->work.iWorkEltSize        = iWorkEltSize;
+    mdl->work.nWorkElts           = nWorkElts;
+    mdl->work.iNextLocalElt       = 0;
+    mdl->work.iNextRemoteElt      = nWorkElts-1;
+    mdl->work.nLocalWorkRemaining = nWorkElts;
+    mdl->work.idScheduler = (mdl->nThreads)-1; /* Set the scheduler to be the highest
+                                                * node on the theory that it probably
+                                                * has the least amount of work.*/
+    mdl->work.iRidCurrent = 0;
+    
+    mdlprintf(mdl, "\nDYNAMIC SCHEDULING Requested.  Initializing workspace.  Master scheduler is %d\n",
+              w->idScheduler);
+
+    /* Init scheduler space */
+    if (mdl->idSelf == w->idScheduler) mdl->sch.bIAmScheduler = 1;
+    else mdl->sch.bIAmScheduler = 0;
+    mdl->sch.iWorkRemainingList = NULL;
+    mdl->sch.nCheckIn = 0;
+    mdl->sch.nCheckOut = 0;
+
+    /* Allocate buffer sizes to send/receive work elements */
+    w->ibufRemoteWork = 0;
+    w->nbufRemoteWork = 0;
+    w->pbufRemoteWork = (char *) malloc(MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize);
+    assert(w->pbufRemoteWork != NULL);
+    w->nbufIncomingWork = 0;
+    w->retIncomingWork = MDL_WORK_NULL;
+    w->pbufIncomingWork = (char *) malloc(MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize);
+    assert(w->pbufIncomingWork != NULL);
+    w->iBufSize = sizeof(WORKHEAD) + MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize;
+    w->pbufRcv = (char *) malloc(w->iBufSize);
+    assert(w->pbufRcv != NULL);
+    w->pbufSnd = (char *) malloc(w->iBufSize);
+    assert(w->pbufSnd != NULL);
+    w->pbufISnd = (char *) malloc(w->iBufSize);
+    assert(w->pbufISnd != NULL);
+    w->handleISnd = MPI_REQUEST_NULL;
+    w->bRequestedMoreWork = 0;
+    
+    /* Post first work-related receive */
+    MPI_Irecv(w->pbufRcv, w->iBufSize, MPI_BYTE, MPI_ANY_SOURCE,
+              MDL_TAG_WORKCOMM, MPI_COMM_WORLD, &(w->handleRcv));
+
+    /* Init first message */
+    wh.rid = w->iRidCurrent; /* RequestID: 1st message */
+    wh.oid = mdl->idSelf; /* Originator ID: This thread */
+    wh.id = mdl->idSelf; /* Sender ID: This thread */
+    wh.nWorkUnits = 0;
+    wh.nLocalWorkRemaining = w->nLocalWorkRemaining;
+    wh.iMessage = MDL_WORK_CHECKIN;
+
+    /* Have all threads check in */
+    if (mdl->sch.bIAmScheduler) {
+        Packet p;
+        PacketHeap *pHeap;
+        mdlDiag(mdl, "I am the master scheduler!\n");
+        /* Init work tracking data structs */
+        mdl->sch.iWorkRemainingList = (int *) malloc(mdl->nThreads*sizeof(int));
+        assert(mdl->sch.iWorkRemainingList != NULL);
+        mdlDiag(mdl, "Waiting to receive check-in from all threads...");
+        mdl->sch.nCheckIn = 1;
+        mdl->sch.iWorkRemainingList[mdl->idSelf] = w->nLocalWorkRemaining;
+        while (mdl->sch.nCheckIn < mdl->nThreads) {
+            ret = MPI_Wait(&(w->handleRcv), &status);
+            assert(ret == MPI_SUCCESS);
+            ret = mdlWorkReceive(mdl, NULL);
+            assert(ret != MDL_WORK_ERROR);
+        }
+        mdlDiag(mdl, "Received check-in from all threads.\n");
+        /* Contruct the priority queue */
+        pHeap = &(mdl->sch.pWorkRemainingHeap);
+        mdlHeap_init(pHeap);
+        for (i=0;i<mdl->nThreads;++i) {
+            p.data = i; /* Thread ID */
+            /* Set to negative since the smallest integer is at the top of the PQ */
+            p.priority = (-1) * (mdl->sch.iWorkRemainingList[i]);
+            /*fprintf(stderr,"Adding item data: %d  priority: %d\n",
+	               p.data,p.priority);*/
+            mdlHeap_addItem(pHeap, p);
+        }
+	/*
+        j = 0;
+        while (j< pHeap->size) {
+            fprintf(stderr,"Heap[%d] data=%d  priority=%d\n", j,
+                    pHeap->packets[j].data,
+                    pHeap->packets[j].priority);
+            ++j;
+        }
+	*/
+        mdl->sch.nCheckOut = 1; /* For the moment, "check-out" the master immediately. */
+    } else {
+        /* Use blocking sends as this is a check-in anyway */
+        MPI_Send(&wh, sizeof(WORKHEAD), MPI_BYTE, w->idScheduler, MDL_TAG_WORKCOMM,
+                 MPI_COMM_WORLD);
+    }
+    mdlDiag(mdl, "Thread check-in complete.  Work management layer has been initialized.\n\n");
+    
+}
+
+void mdlFinishWork(MDL mdl, void *pWorkList)
+{ 
+    WORK *w = &(mdl->work);
+    SCHEDULE *s = &(mdl->sch);
+    /*int ret;*/
+    /*MPI_Status status;*/
+
+    if (mdl->work.idScheduler == -1 ) {
+        /* Work management was never initialized...just return*/
+        assert(mdl->work.cWorkList == NULL);
+        return;
+    }
+    
+    /* Always check that the worklist is the same */
+    assert(w->cWorkList == (char *)pWorkList);
+
+    /* Receive buffer should have already been deallocated */
+    assert(w->pbufRcv == NULL);
+
+    if(s->bIAmScheduler) {
+        s->bIAmScheduler = 0;
+        /* Work schedule buffer should have already been deallocated */
+        assert(s->iWorkRemainingList == NULL);
+        s->nCheckIn = -1;
+        s->nCheckOut = -1;
+    }
+    mdl->work.cWorkList = NULL;
+    mdl->work.iNextLocalElt = -1;
+    mdl->work.iNextRemoteElt = -1;
+    mdl->work.nLocalWorkRemaining = -1;
+    mdl->work.idScheduler = -1;
+
+
+    /* Cancel the pending MPI_Irecv and we are done with Work management.
+     * When this work for real, the master scheduler will initiate the checkout. */
+    /*
+    ret = MPI_Cancel(&(w->handleRcv));
+    assert(ret == MPI_SUCCESS);
+    free(w->pbufRcv);
+    */
+
+    mdlDiag(mdl, "\nDYNAMIC SCHEDULING completed.\n\n");
+}
+
+void mdlConstructWorkRequest(MDL mdl, WORKHEAD *wh)
+{
+    WORK *w = &(mdl->work);
+    ++(w->iRidCurrent);
+    wh->rid = w->iRidCurrent;
+    wh->oid = mdl->idSelf;
+    wh->id =  mdl->idSelf;
+    wh->nWorkUnits = 0;
+    wh->nLocalWorkRemaining = w->nLocalWorkRemaining;
+    wh->iMessage = MDL_WORK_REQUEST;
+}
+
+void mdlSendWorkRequest(MDL mdl)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD *whiOut = (WORKHEAD *) w->pbufISnd;
+    int flag;
+    MPI_Status status;
+
+    MPI_Test(&(w->handleISnd), &flag, &status);
+    if (!flag) {
+        /* Previous request did not complete */
+        fprintf(stderr,
+                "%d: MPI_Isend did not complete, yet!  Waiting to send work request.\n",
+                mdl->idSelf);
+        MPI_Wait(&(w->handleISnd), &status);
+    }
+    mdlConstructWorkRequest(mdl, whiOut);
+    MPI_Isend(whiOut, sizeof(WORKHEAD), MPI_BYTE, w->idScheduler,
+              MDL_TAG_WORKCOMM, MPI_COMM_WORLD, &(w->handleISnd));
+    w->bRequestedMoreWork = 1;
+}
+
+void mdlConstructWorkUpdate(MDL mdl, WORKHEAD *wh)
+{
+    wh->rid = -1;
+    wh->oid = mdl->idSelf;
+    wh->id = mdl->idSelf;
+    wh->nWorkUnits = 0;
+    wh->nLocalWorkRemaining = mdl->work.nLocalWorkRemaining;
+    wh->iMessage = MDL_WORK_UPDATE;
+}
+
+void mdlSendWorkUpdate(MDL mdl)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD *whiOut = (WORKHEAD *) w->pbufISnd;
+    int flag;
+    MPI_Status status;
+
+    MPI_Test(&(w->handleISnd), &flag, &status);
+    if (!flag) {
+        /* Previous request did not complete */
+        fprintf(stderr,
+                "%d: MPI_Isend did not complete, yet!  Waiting to send work update.\n",
+                mdl->idSelf);
+        MPI_Wait(&(w->handleISnd), &status);
+    }
+    mdlConstructWorkUpdate(mdl, whiOut);
+    MPI_Isend(whiOut, sizeof(WORKHEAD), MPI_BYTE, w->idScheduler, MDL_TAG_WORKCOMM,
+              MPI_COMM_WORLD, &(w->handleISnd));
+    /*MPI_Send(&whiOut, sizeof(WORKHEAD), MPI_BYTE, w->idScheduler, MDL_TAG_WORKCOMM,
+               MPI_COMM_WORLD);*/
+}
+
+void mdlConstructWorkCheckout(MDL mdl, WORKHEAD *wh)
+{
+    WORK *w = &(mdl->work);
+
+    assert(w->nLocalWorkRemaining == 0);
+    ++(w->iRidCurrent);
+    wh->rid = w->iRidCurrent;
+    wh->oid = mdl->idSelf;
+    wh->id = mdl->idSelf;
+    wh->nWorkUnits = 0;
+    wh->nLocalWorkRemaining = 0;
+    wh->iMessage = MDL_WORK_CHECKOUT;
+}
+
+
+
+
+void *mdlRequestWork(MDL mdl, void *pWorkList)
+{
+    WORK *w = &(mdl->work);
+    WORKHEAD wh, *whIn, *whiOut;
+    char *wDataIn;
+    SCHEDULE *s = &(mdl->sch);
+    int ret, flag, bFirstTime;
+    MPI_Status status;
+
+    /* Always check that the worklist is the same */
+    assert(w->cWorkList == (char *)pWorkList);
+
+    whIn = (WORKHEAD *) w->pbufRcv;
+    wDataIn = (w->pbufRcv) + sizeof(WORKHEAD);
+    whiOut = (WORKHEAD *) w->pbufISnd;
+
+    mdlCacheCheck(mdl);
+
+    if (mdl->sch.bIAmScheduler) {
+        assert(s->nCheckOut);
+        /* This is the condition that signals there is no work left to do */
+        if (mdl->work.iNextLocalElt > mdl->work.iNextRemoteElt) {
+            mdlDiag(mdl,"Master scheduler is out of work.  Waiting for threads to checkout.\n");
+            /* We need to keep servicing the other nodes until everyone checks out */
+            while (s->nCheckOut < mdl->nThreads) {
+                MPI_Test(&mdl->ReqRcv, &flag, &status);
+                if (flag != 0) mdlCacheReceive(mdl,NULL);
+                MPI_Test(&(w->handleRcv), &flag, &status);
+                if (flag != 0) mdlWorkReceive(mdl, NULL);
+            }
+            /* All threads are now checked out.  Finish up. */
+            mdlDiag(mdl,"All threads have checked out.\n");
+            /* Print PQ and work list */
+            fprintf(stderr,"iWorkRemainingList:\n");
+	    /*
+            for (i=0;i<mdl->nThreads;++i) 
+                fprintf(stderr,"%d:  %d\n",i,s->iWorkRemainingList[i]);
+            fprintf(stderr,"pWorkRemainingHeap:\n");
+            while( !mdlHeap_isEmpty(&(s->pWorkRemainingHeap)) ) {
+                Packet p;
+                p = mdlHeap_extractMin(&(s->pWorkRemainingHeap));
+                fprintf(stderr,"PE %d:  %d\n",p.data,p.priority);
+	    }
+	    */
+            /* Reset iWorkRemainingList */
+            free(s->iWorkRemainingList);
+            s->iWorkRemainingList = NULL;
+            /* Cancel the pending MPI_Irecv and free the receive buffer */
+            ret = MPI_Cancel(&(w->handleRcv));
+            assert(ret == MPI_SUCCESS);
+            free(w->pbufRcv);
+            free(w->pbufSnd);
+            free(w->pbufISnd);
+            w->pbufRcv = NULL;
+            mdlDiag(mdl,"Pending received cancelled.  Buffers cleared.  Exiting.\n");
+            return NULL;
+        } else {
+            Packet p;
+            PacketHeap *pHeap;
+            pHeap = &(mdl->sch.pWorkRemainingHeap);
+            /* Otherwise, we increment iNextLocalElt to point to the next unassigned
+             * element, and return the original iNextLocalElt element. */
+            ++(mdl->work.iNextLocalElt);
+            --(mdl->work.nLocalWorkRemaining);
+            /*fprintf(stderr,"%d: mdlRequestWork: iNextLocalElt=%d  iNextRemoteElt=%d, nLocalWorkRemaining: %d\n",
+                      mdl->idSelf, mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt,
+                      mdl->work.nLocalWorkRemaining);*/
+            /* Update workremaininglist */
+            s->iWorkRemainingList[mdl->idSelf] = w->nLocalWorkRemaining;
+            /* If there is still work left, add to the priority queue. */
+            if (mdl->work.nLocalWorkRemaining) {
+                assert(mdl->work.iNextLocalElt <= mdl->work.iNextRemoteElt);
+                p.data = mdl->idSelf;
+                p.priority = (-1) * w->nLocalWorkRemaining;
+                mdlHeap_addItem(pHeap, p);
+            }
+            return( &(mdl->work.cWorkList[(mdl->work.iNextLocalElt-1)*(mdl->work.iWorkEltSize)]) );
+        }            
+
+    } else { /* I am not the scheduler */
+        
+        if (mdl->work.iNextLocalElt > mdl->work.iNextRemoteElt) {
+            /* There is no local work left to do... */
+            if (w->ibufRemoteWork < w->nbufRemoteWork) {
+                /* ...But we have remote work already buffered */
+                /* paddr points to the address to return */
+                char *paddr = &(w->pbufRemoteWork[(w->ibufRemoteWork) * w->iWorkEltSize]);
+                /* The amount of work remaining including the work unit pointed to by paddr */
+                int nWorkRemaining = w->nbufRemoteWork - w->ibufRemoteWork ;
+                
+                ++(w->ibufRemoteWork);
+                /* Check to see if we have to send off another work request */
+                if (!w->bRequestedMoreWork && nWorkRemaining <= MDL_WORK_UNITS_PREFETCH) {
+                    mdlprintf(mdl, "%d units of buffered remote work remaining...", nWorkRemaining);
+                    mdlprintf(mdl, "sending work request to scheduler.\n");
+                    mdlSendWorkRequest(mdl);
+                }
+                return(paddr);
+            } else {
+                /* ...And we need to acquire more remote work */
+                assert(w->nLocalWorkRemaining == 0);
+                w->ibufRemoteWork = 0;
+                w->nbufRemoteWork = 0;
+                mdlprintf(mdl,"Out of local work...");
+                /* See if we still need to request work from other PEs */
+                if (!w->bRequestedMoreWork) {
+                    mdlprintf(mdl, "0 units of buffered remote work remaining...");
+                    mdlprintf(mdl, "sending work request to scheduler.\n");
+                    mdlSendWorkRequest(mdl);
+                }
+
+                /* Now do cache receives until we get our work assignment */
+                bFirstTime = 1;
+                while (w->retIncomingWork == MDL_WORK_NULL) {
+                    if (bFirstTime) {
+                        fprintf(stderr,"%d: Waiting for work assignment!\n", mdl->idSelf);
+                        mdlprintf(mdl, "Waiting for work assignment!...");
+                        bFirstTime = 0;
+                    }
+                    MPI_Test(&mdl->ReqRcv, &flag, &status);
+                    if (flag != 0) mdlCacheReceive(mdl,NULL);
+                    MPI_Test(&(w->handleRcv), &flag, &status);
+                    if (flag != 0) {
+                        ret = mdlWorkReceive(mdl, NULL);
+                        /* These should be the only three responses possible at this point */
+                        assert(ret == MDL_WORK_NOWORK || ret == MDL_WORK_ASSIGN || 
+                               ret == MDL_WORK_QUERY);
+                    }
+                }                            
+                mdlprintf(mdl, "Work assignment received.\n");
+                w->bRequestedMoreWork = 0;
+                /* If our outgoing work request has not completed yet, then
+                 * there is something majorly wrong. */
+                MPI_Test(&(w->handleISnd), &flag, &status);
+                if (!flag) {
+                    /* Previous request did not complete */
+                    fprintf(stderr,
+                            "%d: ERROR! MPI_Isend work request not complete, even though we!\n",
+                            mdl->idSelf);
+                    fprintf(stderr,"   have just received a work assignment!\n");
+                    mdlassert(mdl, 0);
+                }
+                /* Get the work */
+                if (w->retIncomingWork == MDL_WORK_NOWORK) {
+                    /* There is no more work.  Send checkout and return NULL. */
+                    mdlDiag(mdl,"No more work.  Sending checkout...");
+                    mdlConstructWorkCheckout(mdl, &wh);
+                    MPI_Send(&wh, sizeof(WORKHEAD), MPI_BYTE, w->idScheduler, MDL_TAG_WORKCOMM,
+                             MPI_COMM_WORLD);
+                    /* Cancel the pending MPI_Irecv and free the receive buffer */
+                    ret = MPI_Cancel(&(w->handleRcv));
+                    assert(ret == MPI_SUCCESS);
+                    free(w->pbufRcv);
+                    w->pbufRcv = NULL;
+                    mdlDiag(mdl,"Checkout sent.\n");
+                    mdlDiag(mdl,"Pending received cancelled.  Buffers cleared.  Exiting.\n");
+                    return NULL;
+                } else {
+                    assert(w->retIncomingWork == MDL_WORK_ASSIGN);
+                    /* Copy from incoming work buffer to remote work buffer */
+                    assert(w->nbufIncomingWork <= MDL_WORK_UNITS_PER_REQ);
+                    w->nbufRemoteWork = w->nbufIncomingWork;
+                    memcpy(w->pbufRemoteWork, w->pbufIncomingWork, w->iWorkEltSize * w->nbufRemoteWork);
+                    w->ibufRemoteWork = 1; /* Next work unit (not counting the one we are
+                                            * returning in the next line) */
+                    /* Re-init the incoming work buffer */
+                    w->retIncomingWork = MDL_WORK_NULL;
+                    w->nbufIncomingWork = 0;
+                    return(w->pbufRemoteWork); /* Return the 0th element */
+                }
+            } /* Return remote work buffer or acquire new remote work buffer */
+
+        } /* if no more local work */
+        else { /* We still have local work */
+            /* Address to of local work unit to return */
+            char *paddr = &(mdl->work.cWorkList[(mdl->work.iNextLocalElt) *
+                                                (mdl->work.iWorkEltSize)]);
+                                                
+            mdlCacheCheck(mdl); /*XXX Remove this cache check??*/
+            /* Otherwise, we increment iNextLocalElt to point to the next unassigned
+             * element, and return the original iNextLocalElt element. */
+            mdlprintf(mdl,"%d: iNextLocalElt=%d  iNextRemoteElt=%d\n",
+                    mdl->idSelf, mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);
+            /*fprintf(stderr,"%d: iNextLocalElt=%d  iNextRemoteElt=%d\n",
+	      mdl->idSelf, mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);*/
+            ++(mdl->work.iNextLocalElt);
+            --(mdl->work.nLocalWorkRemaining);
+            /* Check to see if we send just and update, or we need to send a work request */
+            if (!w->bRequestedMoreWork && 
+                mdl->work.nLocalWorkRemaining+1 <= MDL_WORK_UNITS_PREFETCH) {
+                /* Isend work request if remaining undone (as opposed to unassigned) work
+                 * units == MDL_WORK_UNITS_PREFETCH */
+                mdlprintf(mdl,"%d units of local work remaining...sending work request to scheduler.\n",
+                          mdl->work.nLocalWorkRemaining+1);
+                mdlSendWorkRequest(mdl);
+            } else {
+                /* Just Send update to scheduler */
+                mdlDiag(mdl,"Sending update to scheduler.\n");
+                mdlSendWorkUpdate(mdl);
+            }
+            
+            return paddr;
+        }
+    } /* I am not scheduler */
+
+}

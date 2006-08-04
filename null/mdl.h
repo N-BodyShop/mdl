@@ -3,11 +3,22 @@
 #include <stdio.h>
 #include <assert.h>
 
+#define MDL_VERSION_NUMBER 2.2
+
 #if defined(__osf__) || defined(__sgi)
 #define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
 #endif
 
 #define SRV_STOP		0
+
+typedef struct workSpace {
+    char *cWorkList;         /* Pointer to this PEs work list */
+    int iWorkEltSize;        /* Number of bytes per work list element */
+    int nWorkElts;           /* Number of elemets in cWorkList */
+    int iNextLocalElt;       /* The next element for the local PE to work on */
+    int iNextRemoteElt;      /* The next element for a remote PE to work on, if requested */
+    int nLocalWorkRemaining; /* Total number of unassigned work elements remaining */
+} WORK;
 
 typedef struct cacheSpace {
 	int iType;
@@ -57,7 +68,46 @@ typedef struct mdlContext {
 	int iMaxDataSize;
 	int nMaxCacheIds;
 	CACHE *cache;
+    /*
+    ** Work management stuff!
+    */
+    WORK work;
+
 	} * MDL;
+
+
+/*
+** These are for reduction operations, which need MPI datatypes
+*/
+/* MPI REDUCTION OPERATIONS */
+enum ntropy_reduction {
+    MDL_REDUCE_MAX,
+    MDL_REDUCE_MIN,
+    MDL_REDUCE_SUM,
+    MDL_REDUCE_PROD,
+    MDL_REDUCE_LAND,
+    MDL_REDUCE_BAND,
+    MDL_REDUCE_LOR,
+    MDL_REDUCE_BOR,
+    MDL_REDUCE_LXOR,
+    MDL_REDUCE_BXOR,
+    MDL_REDUCE_MAXLOC,
+    MDL_REDUCE_MINLOC
+};
+
+/* MPI DATATYPES */
+enum ntropy_datatypes {
+    MDL_TYPE_INT,
+    MDL_TYPE_LONG,
+    MDL_TYPE_SHORT,
+    MDL_TYPE_UNSIGNED_SHORT,
+    MDL_TYPE_UNSIGNED,
+    MDL_TYPE_UNSIGNED_LONG,
+    MDL_TYPE_FLOAT,
+    MDL_TYPE_DOUBLE,
+    MDL_TYPE_LONG_DOUBLE,
+    MDL_TYPE_BYTE
+};
 
 
 /*
@@ -131,6 +181,8 @@ void mdlPrintTimer(MDL mdl,char *message,mdlTimer *);
 /*
  ** General Functions
  */
+
+double mdlVersion(MDL);
 double mdlCpuTimer(MDL);
 int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
@@ -147,10 +199,13 @@ void mdlHandler(MDL);
  ** Caching functions.
  */
 void *mdlMalloc(MDL,int);
+void *mdlMallocMax(MDL mdl, size_t iSize, int *iMaxSize);
+void *mdlMallocShared(MDL mdl, size_t iSize, int *iEltSize);
 void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
+void mdlDUMcache(MDL,int);
 void mdlFinishCache(MDL,int);
 void mdlCacheCheck(MDL);
 void *mdlAquire(MDL,int,int,int);
@@ -162,6 +217,20 @@ double mdlNumAccess(MDL,int);
 double mdlMissRatio(MDL,int);
 double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
+/* 
+** Work management functions.
+*/
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts);
+void mdlFinishWork(MDL mdl, void *pWorkList);
+void *mdlRequestWork(MDL mdl, void *pWorkList);
+/*
+** Collectives
+*/
+void mdlCollectShared(MDL mdl, void *, int);
+void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
+                  void *pReceiveArray, int iEltSize, int nElements);
+void mdlAllToAll(MDL mdl, void *pSendArray, void *pReceiveArray, int iEltSize);
+int mdlComputeEltSizeFromType(MDL mdl, int iType);
 
 #endif
 

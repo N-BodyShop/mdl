@@ -18,11 +18,15 @@
 #define MDL_NOCACHE			0
 #define MDL_ROCACHE			1
 #define MDL_COCACHE			2
-
+#define MDL_DUMCACHE        3
 
 #define MDL_DEFAULT_BYTES		4096
 #define MDL_DEFAULT_SERVICES	50
 #define MDL_DEFAULT_CACHEIDS	5
+
+double mdlVersion(MDL mdl) {
+     return MDL_VERSION_NUMBER;
+}
 
 void _srvNull(void *p1,void *vin,int nIn,void *vout,int *pnOut)
 {
@@ -369,14 +373,79 @@ void mdlHandler(MDL mdl)
  */
 void *mdlMalloc(MDL mdl,int iSize)
 {	
+        if (!iSize) return(NULL);
 	return(malloc(iSize));
 	}
 
+
+void *mdlMallocMax(MDL mdl, size_t iSize, int *iMaxSize)
+{
+     *iMaxSize = (int) iSize;
+     if (!iSize) return(NULL);
+     return(malloc(iSize));
+}
+     
+void *mdlMallocShared(MDL mdl, size_t iSize, int *iEltSize)
+{
+     *iEltSize = (int) iSize;
+     if (!iSize) return(NULL);
+     return(malloc(iSize));
+}
+     
 
 void mdlFree(MDL mdl,void *p)
 {
 	free(p);
 	}
+
+void mdlCollectShared(MDL mdl, void *parray, int iEltSize)
+{
+     assert(1);
+}
+
+
+void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
+                  void *pReceiveArray, int iEltSize, int nElements)
+{
+    /* Copy the single memory element from p*/
+    mdlassert(mdl, iEltSize == mdlComputeEltSizeFromType(mdl, iType));
+    memcpy(pReceiveArray, pSendArray, iEltSize*nElements);
+}
+
+void mdlAllToAll(MDL mdl, void *pSendArray, void *pReceiveArray, int iEltSize)
+{
+    /* Copy the single memory element from p*/
+    memcpy(pReceiveArray, pSendArray,iEltSize);
+}
+
+int mdlComputeEltSizeFromType(MDL mdl, int iType)
+{
+    /* Figure out number of bytes to copy */
+    switch (iType) {
+    case MDL_TYPE_INT:
+        return sizeof(int);
+    case MDL_TYPE_LONG:
+        return sizeof(long);
+    case MDL_TYPE_SHORT:
+        return sizeof(short);
+    case MDL_TYPE_UNSIGNED_SHORT:
+        return sizeof(unsigned short);
+    case MDL_TYPE_UNSIGNED:
+        return sizeof(unsigned);
+    case MDL_TYPE_UNSIGNED_LONG:
+        return sizeof(unsigned long);
+    case MDL_TYPE_FLOAT:
+        return sizeof(float);
+    case MDL_TYPE_DOUBLE:
+        return sizeof(double);
+    case MDL_TYPE_LONG_DOUBLE:
+        return sizeof(long double);
+    case MDL_TYPE_BYTE:
+        return sizeof(char);
+    default:
+        assert(1);
+    }
+}
 
 
 /*
@@ -450,6 +519,22 @@ void mdlCOcache(MDL mdl,int cid,void *pData,int iDataSize,int nData,
 	}
 
 
+/*
+ ** Initialize a "Dummy" caching space for synchronizes
+ */
+void mdlDUMcache(MDL mdl,int cid)
+{
+	CACHE *c;
+    void *pData = NULL;
+    int iDataSize = 0;
+    int nData = 0;
+
+	c = CacheInitialize(mdl,cid,pData,iDataSize,nData);
+	c->iType = MDL_DUMCACHE;
+	c->init = NULL;
+	c->combine = NULL;
+	}
+
 void mdlFinishCache(MDL mdl,int cid)
 {
 	CACHE *c = &mdl->cache[cid];
@@ -515,3 +600,35 @@ double mdlMinRatio(MDL mdl,int cid)
 	if (dAccess > 0.0) return(c->nMin/dAccess);
 	else return(0.0);
 	}
+
+/*
+** New MDL Work management functions
+*/
+
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
+{
+    mdl->work.cWorkList           = pWorkList;
+    mdl->work.iWorkEltSize        = iWorkEltSize;
+    mdl->work.nWorkElts           = nWorkElts;
+    mdl->work.iNextLocalElt       = 0;
+    mdl->work.iNextRemoteElt      = nWorkElts-1;
+    mdl->work.nLocalWorkRemaining = nWorkElts;
+}
+
+void mdlFinishWork(MDL mdl, void *pWorkList)
+{ 
+    assert(1);
+}
+
+void *mdlRequestWork(MDL mdl, void *pWorkList)
+{
+    /* This is the condition that signals there is no work left to do */
+    if (mdl->work.iNextLocalElt > mdl->work.iNextRemoteElt) return(NULL);
+    /* Otherwise, we increment iNextLocalElt to point to the next unassigned
+     * element, and return the original iNextLocalElt element. */
+    fprintf(stderr,"iNextLocalElt=%d  iNextRemoteElt=%d\n",
+            mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);
+    ++(mdl->work.iNextLocalElt);
+    return( &(mdl->work.cWorkList[(mdl->work.iNextLocalElt-1)*mdl->work.iWorkEltSize]) );
+}
+

@@ -4,6 +4,7 @@
 #include <assert.h>
 #include "mpi.h"
 
+#define MDL_VERSION_NUMBER 2.2
 
 #define SRV_STOP		0
 
@@ -13,6 +14,74 @@
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
 #define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
 
+/*
+ * Work management structs
+ */
+
+/* Priority queue structs */
+
+/* Size of the PQ array (should be somewhat larger than number of threads)*/
+#define MDL_PQHEAP_SIZE  2048
+
+typedef struct
+{
+    int priority;
+    int data;
+} Packet;
+
+typedef struct {
+	Packet packets[MDL_PQHEAP_SIZE];
+	unsigned int size;
+} PacketHeap;
+
+
+/* This stuct is used by every thread to manage its local work elements
+ * and to send/receive work related communications. */
+typedef struct workSpace {
+    char *cWorkList;         /* Pointer to this PEs work list */
+    int iWorkEltSize;        /* Number of bytes per work list element */
+    int nWorkElts;           /* Number of elemets in cWorkList */
+    int iNextLocalElt;       /* The next element for the local PE to work on */
+    int iNextRemoteElt;      /* The next element for a remote PE to work on, if requested */
+    int nLocalWorkRemaining; /* Total number of unassigned work elements remaining */
+    int idScheduler;         /* MPI id of the master scheduler node */
+    char *pbufRemoteWork;    /* Buffer containing previously fetched remote work assignments */
+    int nbufRemoteWork;      /* Number of elements in remote work buffer */
+    int ibufRemoteWork;      /* "Index" for the current element in remote work buffer */
+    char *pbufIncomingWork;  /* Temporary buffer to store incoming work assignments */
+    int nbufIncomingWork;    /* Number of elements in incoming work buffer */
+    int retIncomingWork;     /* The mdlWorkReceive return code for the incoming work buffer */
+    /* MPI Buffers, handles, etc */
+    int iBufSize;            /* Size (in bytes) of the buffer to send/receive work comms */
+    char *pbufSnd;           /* Buffer for regular sends */
+    char *pbufRcv;           /* Buffer in which to receive all MDL_TAG_WORK messages */
+    MPI_Request handleRcv;   /* MPI handle for the request dumping into pbufRcv */
+    char *pbufISnd;          /* Buffer for Isends */
+    MPI_Request handleISnd;  /* MPI handle for Isends */
+    int bRequestedMoreWork;  /* Have I send out a request for more work already? */
+    int iRidCurrent;         /* The current outstanding work request ID */
+} WORK;
+
+/* This struct is only used by the master scheduler thread.  All other
+ * threads simply set bIAmScheduler to 0. */
+typedef struct scheduleSpace {
+    int bIAmScheduler;
+    int nCheckIn;
+    int nCheckOut;
+    int *iWorkRemainingList; /* An array 0..nthreads-1 of local work elements that
+                              * each thread has still unassigned */
+    PacketHeap pWorkRemainingHeap;
+} SCHEDULE;
+
+typedef struct workHeader {
+    int rid; /* Request ID */
+    int oid; /* Request originator ID (not necessarily the thread that sent this message) */
+    int id;  /* The actual thread that sent this specific message */
+    int nWorkUnits; /* The number of work units contained in this message */
+    int nLocalWorkRemaining; /* The work remaining for thread "id" */
+    int iMessage; /* The "message" */
+} WORKHEAD;
+    
 typedef struct cacheTag {
 	int iKey;
 	int nLock;
@@ -25,10 +94,10 @@ typedef struct cacheTag {
  ** should align up to at least QUAD word, which should be enough.
  */
 typedef struct cacheHeader {
-	int cid;
-	int mid;
-	int id;
-	int iLine;
+	int cid;   /* Cache ID */
+	int mid;   /* Message ID */
+	int id;    /* ID of sender */
+	int iLine; /* Line requested */
 	} CAHEAD;
 
 
@@ -107,7 +176,46 @@ typedef struct mdlContext {
 	char *pszFlsh;
 	int nMaxCacheIds;
 	CACHE *cache;
+    /*
+    ** Work management stuff!
+    */
+    WORK work;
+    SCHEDULE sch;
 	} * MDL;
+
+
+/*
+** These are for reduction operations, which need MPI datatypes
+*/
+/* MPI REDUCTION OPERATIONS */
+enum ntropy_reduction {
+    MDL_REDUCE_MAX,
+    MDL_REDUCE_MIN,
+    MDL_REDUCE_SUM,
+    MDL_REDUCE_PROD,
+    MDL_REDUCE_LAND,
+    MDL_REDUCE_BAND,
+    MDL_REDUCE_LOR,
+    MDL_REDUCE_BOR,
+    MDL_REDUCE_LXOR,
+    MDL_REDUCE_BXOR,
+    MDL_REDUCE_MAXLOC,
+    MDL_REDUCE_MINLOC
+};
+
+/* MPI DATATYPES */
+enum ntropy_datatypes {
+    MDL_TYPE_INT,
+    MDL_TYPE_LONG,
+    MDL_TYPE_SHORT,
+    MDL_TYPE_UNSIGNED_SHORT,
+    MDL_TYPE_UNSIGNED,
+    MDL_TYPE_UNSIGNED_LONG,
+    MDL_TYPE_FLOAT,
+    MDL_TYPE_DOUBLE,
+    MDL_TYPE_LONG_DOUBLE,
+    MDL_TYPE_BYTE
+};
 
 
 /*
@@ -186,6 +294,7 @@ void mdlPrintTimer(MDL mdl,char *message,mdlTimer *);
 /*
  ** General Functions
  */
+double mdlVersion(MDL);
 double mdlCpuTimer(MDL);
 int mdlInitialize(MDL *,char **,void (*)(MDL));
 void mdlFinish(MDL);
@@ -202,10 +311,13 @@ void mdlHandler(MDL);
  ** Caching functions.
  */
 void *mdlMalloc(MDL,size_t);
+void *mdlMallocMax(MDL mdl, size_t, int *);
+void *mdlMallocShared(MDL mdl, size_t, int *);
 void mdlFree(MDL,void *);
 void mdlROcache(MDL,int,void *,int,int);
 void mdlCOcache(MDL,int,void *,int,int,
 				void (*)(void *),void (*)(void *,void *));
+void mdlDUMcache(MDL,int);
 void mdlFinishCache(MDL,int);
 void mdlCacheCheck(MDL);
 void *mdlAquire(MDL,int,int,int);
@@ -217,5 +329,20 @@ double mdlNumAccess(MDL,int);
 double mdlMissRatio(MDL,int);
 double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
+/* 
+** Work management functions.
+*/
+int  mdlWorkReceive(MDL mdl, char *pWork);
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts);
+void mdlFinishWork(MDL mdl, void *pWorkList);
+void *mdlRequestWork(MDL mdl, void *pWorkList);
+/*
+** Collectives
+*/
+int mdlComputeEltSizeFromType(MDL mdl, int iType);
+void mdlCollectShared(MDL mdl, void *, int);
+void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
+                  void *pReceiveArray, int iEltSize, int nElements);
+void mdlAllToAll(MDL mdl, void *pScatterArray, void *pGatherArray, int iEltSize);
 
 #endif
