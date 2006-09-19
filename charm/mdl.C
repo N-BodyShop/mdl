@@ -38,7 +38,7 @@ double mdlCpuTimer(MDL mdl)
 #ifndef _CRAYMPP
 	struct rusage ru;
 
-	getrusage((__rusage_who) 0,&ru);
+	getrusage(0,&ru);
 	return((double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec);
 #else
 	return( ((double) clock())/CLOCKS_PER_SEC);
@@ -87,7 +87,7 @@ void mdlZeroTimer(MDL mdl, mdlTimer *t)
   tz.tz_dsttime = 0;
   gettimeofday(&tv,&tz);
   t->wallclock = tv.tv_sec + 1e-6*(double) tv.tv_usec;
-  getrusage((__rusage_who) 0,&ru);
+  getrusage(0,&ru);
   t->cpu = (double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec;
   t->system = (double)ru.ru_stime.tv_sec + 1e-6*(double)ru.ru_stime.tv_usec;
 }
@@ -98,7 +98,7 @@ void mdlGetTimer(MDL mdl, mdlTimer *t0, mdlTimer *t)
   struct timeval tv;
   struct rusage ru;
 
-  getrusage((__rusage_who) 0,&ru);
+  getrusage(0,&ru);
   t->cpu = (double)ru.ru_utime.tv_sec + 1e-6*(double)ru.ru_utime.tv_usec - t0->cpu;
   t->system = (double)ru.ru_stime.tv_sec + 1e-6*(double)ru.ru_stime.tv_usec - t0->system;
   tz.tz_minuteswest = 0;
