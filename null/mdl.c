@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
-#include <malloc.h>
+#include <stdlib.h>
 #include <math.h>
 #include <limits.h>
 #include <assert.h>
