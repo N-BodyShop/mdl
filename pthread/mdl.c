@@ -1205,7 +1205,6 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 	int iElt,iLine,i,iKeyVic,nKeyNew;
 	int idVic;
 	int iVictim,*pi;
-	char ach[80];
 	int iLineSize;
 
 	/*
@@ -1274,9 +1273,8 @@ void *doMiss(MDL mdl, int cid, int iIndex, int id, int iKey, int lock)
 	/*
 	 ** Cache Failure!
 	 */
-	sprintf(ach,"MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
-	mdlDiag(mdl,ach);
-	exit(1);
+	mdlprintf(mdl, "MDL CACHE FAILURE: cid == %d, no unlocked lines!\n",cid);
+	assert(0);
  Await:
 	/*
 	 ** Figure out whether this is a "new" miss.
