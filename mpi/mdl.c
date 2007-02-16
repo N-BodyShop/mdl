@@ -212,6 +212,7 @@ int mdlInitialize(MDL *pmdl,char **argv,void (*fcnChild)(MDL))
     mdl->work.iNextRemoteElt = -1;
     mdl->work.nLocalWorkRemaining = -1;
     mdl->work.idScheduler = -1;
+    mdl->work.bDynamic = 0;
 
 	for(argc = 0; argv[argc]; argc++);
 
@@ -616,7 +617,7 @@ void mdlHandler(MDL mdl)
 #define BILLION				1000000000
 
 /*
- * Calling mdlCacheReceive presupposed that you already have posted an MPI_Irecv 
+ * Calling mdlCacheReceive presupposes that you already have posted an MPI_Irecv 
  * with handle mdl->ReqRcv, data going into the buffer mdl->pszRcv (which is
  * of size mdl->iCaBufSize), and tag MDL_TAG_CACHECOM.
  * Initially, mdl->pszRcv is just the size of CAHEAD.  Once a cache is initialized,
@@ -975,6 +976,7 @@ void mdlCollectShared(MDL mdl, void *parray, int iEltSize)
 
      /* Make sure that all iEltSizes are the same on all threads */
      iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     assert(iSizes != NULL);
      MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
      for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
      free(iSizes);
@@ -988,6 +990,120 @@ void mdlCollectShared(MDL mdl, void *parray, int iEltSize)
      return;
 }
 
+
+void mdlBroadcast(MDL mdl, int iRoot, void *vBuf, int iEltSize)
+{
+    MPI_Bcast(vBuf, iEltSize, MPI_BYTE, iRoot, MPI_COMM_WORLD);
+    return;
+}
+
+
+/*
+** Does an MPI_Gather the vOutElts on all threads to vInArray on
+** the master thread.  vInArray should be NULL on all other threads.
+*/
+void mdlGather(MDL mdl, void *vOutElt, void *vInArray, int iEltSize)
+{
+     int *iSizes, i;
+     char *inArray = vInArray;
+     char *outElt = vOutElt;
+
+     if (mdl->idSelf == 0) { 
+         mdlassert(mdl, vInArray != NULL);
+     } else {
+         mdlassert(mdl, vInArray == NULL);
+     }
+
+     /* Make sure that all iEltSizes are the same on all threads */
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     assert(iSizes != NULL);
+     MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
+     free(iSizes);
+
+     /* Now gather the actual elements into the array */
+     MPI_Gather(outElt, iEltSize, MPI_BYTE, inArray,
+		   iEltSize, MPI_BYTE, 0, MPI_COMM_WORLD);
+     return;
+}
+
+
+/*
+** Does an MPI_Gatherv the vOutElts on all threads to an array (returned as void *) on
+** the master thread.  On the master PE, iEltInSizes should be an array of size nThreads
+** and will be filled with the sizes of each threads output.  iEltOutSize is the size
+** of this thread's outgoing data.  piInArrayStride is 0 for all slave threads and 
+** is the stride of the data in vInArray on the master thread.
+** The return value should be NULL on all slave threads.
+*/
+void *mdlGatherv(MDL mdl, void *vOutElt, int *iEltInSizes, int iEltOutSize,
+                 int *piInArrayStride)
+{
+     int i, *iStrides, iStride = 0;
+     char *inArray;
+     char *outElt = vOutElt;
+
+     if (mdl->idSelf == 0) { 
+         mdlassert(mdl, iEltInSizes != NULL);
+     } else {
+         mdlassert(mdl, iEltInSizes == NULL);
+     }
+
+     /* Fill iEltInSizes with the values of iEltSizes for all threads */
+     MPI_Gather(&iEltOutSize, 1, MPI_INT, iEltInSizes, 1, MPI_INT, 0, MPI_COMM_WORLD);
+     if (mdl->idSelf == 0) {
+         /* Find the proper stride*/
+         for (i=0;i<mdl->nThreads;++i) if (iEltInSizes[i] > iStride) iStride = iEltInSizes[i];
+         mdlprintf(mdl,"mdlGatherv found optimal stride of %d\n", iStride);
+         /* Malloc and fill array with strides for MPI_Gatherv call */
+         iStrides = (int *) malloc(mdl->nThreads * sizeof(int));
+         assert(iStrides != NULL);
+         for (i=0;i<mdl->nThreads;++i) iStrides[i] = i*iStride;
+         /* Malloc inArray */
+         inArray = (char *) malloc(mdl->nThreads * iStride);
+         assert(inArray != NULL);
+     } else {
+         iStride = 0;
+         iStrides = NULL;
+         inArray = NULL;
+     }         
+     *piInArrayStride = iStride;
+         
+
+     /* Now gather the actual elements into the array */
+     MPI_Gatherv(outElt, iEltOutSize, MPI_BYTE, inArray,
+                 iEltInSizes, iStrides, MPI_BYTE, 0, MPI_COMM_WORLD);
+
+     if (mdl->idSelf == 0) free(iStrides);
+     return (void *) inArray;
+}
+
+void mdlScatter(MDL mdl, void *vOutArray, void *vInElt, int iEltSize)
+{
+     int *iSizes, i;
+     char *outArray = vOutArray;
+     char *inElt = vInElt;
+
+     if (mdl->idSelf == 0) { 
+         mdlassert(mdl, vOutArray != NULL);
+     } else {
+         mdlassert(mdl, vOutArray == NULL);
+     }
+
+     /* Make sure that all iEltSizes are the same on all threads */
+     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     assert(iSizes != NULL);
+     MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
+     for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
+     free(iSizes);
+
+     /* Now gather the actual elements into the array */
+     MPI_Scatter(outArray, iEltSize, MPI_BYTE, inElt,
+		   iEltSize, MPI_BYTE, 0, MPI_COMM_WORLD);
+     return;
+}
+
+
 void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
                   void *pReceiveArray, int iEltSize, int nElements)
 {
@@ -996,6 +1112,7 @@ void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray,
     mdlassert(mdl, iEltSize == mdlComputeEltSizeFromType(mdl, iType));
     /* Make sure that nElements are the same on all threads */
     iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+    assert(iSizes != NULL);
     MPI_Allgather(&nElements, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
     for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==nElements);
     free(iSizes);
@@ -1016,6 +1133,7 @@ void mdlAllToAll(MDL mdl, void *pScatterArray, void *pGatherArray, int iEltSize)
 
      /* Make sure that all iEltSizes are the same on all threads */
      iSizes = (int *)malloc(mdl->nThreads*sizeof(int));
+     assert(iSizes != NULL);
      MPI_Allgather(&iEltSize, 1, MPI_INT, iSizes, 1, MPI_INT, MPI_COMM_WORLD);
      for (i=0;i<mdl->nThreads;++i) mdlassert(mdl,iSizes[i]==iEltSize);
      free(iSizes);
@@ -1131,6 +1249,7 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 
 	c->pTag[0].nLock = 1;		/* always locked */
 	c->pTag[0].nLast = INT_MAX;  	/* always Most Recently Used */
+    /* Init cache statistics counters */
 	c->nAccess = 0;
 	c->nAccHigh = 0;
 	c->nMiss = 0;				/* !!!, not NB */
@@ -1140,6 +1259,9 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->pbKey = malloc(c->nKeyMax);			/* !!!, not NB */
 	assert(c->pbKey != NULL);			/* !!!, not NB */
 	for (i=0;i<c->nKeyMax;++i) c->pbKey[i] = 0;	/* !!!, not NB */
+    /* Init cache wait timers */
+    c->dTimerWaitReplace = 0.;
+    c->dTimerWaitFlush = 0.;
 	/*
 	 ** Allocate cache data lines.
 	 */
@@ -1508,7 +1630,7 @@ void mdlCacheCheck(MDL mdl)
         mdlCacheReceive(mdl,NULL);
     }
     /* Also check scheduler requests */
-    if (mdl->work.idScheduler != -1) {
+    if (mdl->work.idScheduler >= 0) {
         while (1) {
             MPI_Test(&(mdl->work.handleRcv), &flag, &status);
             if (flag == 0) break;
@@ -1525,12 +1647,13 @@ void *mdlAquire(MDL mdl,int cid,int iIndex,int id)
 	int iElt,iLine,i,iKey,iKeyVic,nKeyNew;
 	int idVic;
 	int iVictim,*pi;
-	char ach[80];
+	/*char ach[80]; unused */
 	CAHEAD *caFlsh;
 	char *pszFlsh;
 	MPI_Status status;
 	MPI_Request reqFlsh;
-	int ret;
+	/*int ret; unused */
+    double dStartCpuTimer;
 
 	++c->nAccess;
 	if (!(c->nAccess & MDL_CHECK_MASK))
@@ -1681,13 +1804,18 @@ GotVictim:
 	 ** At this point 'pLine' is the recipient cache line for the 
 	 ** data requested from processor 'id'.
 	 */
+    dStartCpuTimer = mdlCpuTimer(mdl);
 	while (1) {
 		if(mdlCacheReceive(mdl,pLine)) {
-			if(caFlsh)
+            c->dTimerWaitReplace += (mdlCpuTimer(mdl) - dStartCpuTimer);
+			if(caFlsh) {
+                dStartCpuTimer = mdlCpuTimer(mdl);
 				MPI_Wait(&reqFlsh, &status);
-			return(&pLine[iElt*c->iDataSize]);
-		}
-	}
+                c->dTimerWaitFlush += (mdlCpuTimer(mdl) - dStartCpuTimer);
+            }
+            return(&pLine[iElt*c->iDataSize]);
+        }
+    }
 }
 
 void mdlRelease(MDL mdl,int cid,void *p)
@@ -1709,6 +1837,10 @@ void mdlRelease(MDL mdl,int cid,void *p)
 		assert(iData >= 0 && iData < c->nData);
 		}
 	}
+
+/*
+** MDL cache stats routines
+*/
 
 double mdlNumAccess(MDL mdl,int cid)
 {
@@ -1746,6 +1878,23 @@ double mdlMinRatio(MDL mdl,int cid)
 	if (dAccess > 0.0) return(c->nMin/dAccess);
 	else return(0.0);
 	}
+
+/* Timers */
+
+double mdlWaitReplace(MDL mdl, int cid)
+{ 
+	CACHE *c = &mdl->cache[cid];
+    
+    return(c->dTimerWaitReplace);
+}
+
+double mdlWaitFlush(MDL mdl, int cid)
+{ 
+	CACHE *c = &mdl->cache[cid];
+    
+    return(c->dTimerWaitFlush);
+}
+
 
 
 /* 
@@ -2118,7 +2267,7 @@ int mdlWorkReceive(MDL mdl, char *pWork)
         } else { /* Respond to thread with work assignment. */
             whIOut->rid = whIn->rid;
             whIOut->oid = whIn->oid;
-            whIOut->id  = mdl->idSelf;
+            whIOut->id  = iPE; /* The thread whose work this actually is */
             whIOut->nWorkUnits = nWorkUnitsOut;
             whIOut->nLocalWorkRemaining = 0;
             whIOut->iMessage = MDL_WORK_ASSIGN;
@@ -2142,11 +2291,13 @@ int mdlWorkReceive(MDL mdl, char *pWork)
     case MDL_WORK_NOWORK:
         assert(!(s->bIAmScheduler));
         w->retIncomingWork = MDL_WORK_NOWORK;
+        w->idIncomingWork = -1;
         ret = MDL_WORK_NOWORK;
         break;
     case MDL_WORK_ASSIGN:
         assert(!(s->bIAmScheduler));
         w->retIncomingWork = MDL_WORK_ASSIGN;
+        w->idIncomingWork = whIn->id;
         /* Copy work assignment to incoming work buffer */
         w->nbufIncomingWork = whIn->nWorkUnits;
         memcpy(w->pbufIncomingWork, wDataIn, w->iWorkEltSize * w->nbufIncomingWork);
@@ -2167,7 +2318,20 @@ int mdlWorkReceive(MDL mdl, char *pWork)
     return ret;
 }
 
-void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
+void mdlInitWorkNoDynamic(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
+{
+    mdl->work.cWorkList           = pWorkList;
+    mdl->work.iWorkEltSize        = iWorkEltSize;
+    mdl->work.nWorkElts           = nWorkElts;
+    mdl->work.iNextLocalElt       = 0;
+    mdl->work.iNextRemoteElt      = nWorkElts-1;
+    mdl->work.nLocalWorkRemaining = nWorkElts;
+    mdl->work.idScheduler         = -2;
+    return;
+}
+
+
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts, int bDynamic)
 {
     WORK *w = &(mdl->work);
     WORKHEAD wh;
@@ -2177,6 +2341,15 @@ void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
     if (mdl->work.cWorkList != NULL || mdl->work.idScheduler != -1){
         mdlprintf(mdl, "mdlInitWork called after workspace already initialized!\n");
         assert(0);
+    }
+
+    mdl->work.bDynamic = bDynamic;
+    /* If we are not actually doing dynamic load balancing, call the simple init function
+     * and exit. */
+    if (!bDynamic) { 
+        mdlprintf(mdl, "\nWORK MANAGEMENT requested with no dynamic scheduling.  Workspace initialized for static scheduling.\n");
+        mdlInitWorkNoDynamic(mdl, pWorkList, iWorkEltSize, nWorkElts);
+        return;
     }
 
     mdl->work.cWorkList           = (char *) pWorkList;
@@ -2201,12 +2374,14 @@ void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
     mdl->sch.nCheckOut = 0;
 
     /* Allocate buffer sizes to send/receive work elements */
+    w->idRemoteWork = -1;
     w->ibufRemoteWork = 0;
     w->nbufRemoteWork = 0;
     w->pbufRemoteWork = (char *) malloc(MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize);
     assert(w->pbufRemoteWork != NULL);
     w->nbufIncomingWork = 0;
     w->retIncomingWork = MDL_WORK_NULL;
+    w->idIncomingWork = -1;
     w->pbufIncomingWork = (char *) malloc(MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize);
     assert(w->pbufIncomingWork != NULL);
     w->iBufSize = sizeof(WORKHEAD) + MDL_WORK_UNITS_PER_REQ*w->iWorkEltSize;
@@ -2298,7 +2473,7 @@ void mdlFinishWork(MDL mdl, void *pWorkList)
     /* Receive buffer should have already been deallocated */
     assert(w->pbufRcv == NULL);
 
-    if(s->bIAmScheduler) {
+    if (mdl->work.bDynamic && s->bIAmScheduler) {
         s->bIAmScheduler = 0;
         /* Work schedule buffer should have already been deallocated */
         assert(s->iWorkRemainingList == NULL);
@@ -2310,6 +2485,7 @@ void mdlFinishWork(MDL mdl, void *pWorkList)
     mdl->work.iNextRemoteElt = -1;
     mdl->work.nLocalWorkRemaining = -1;
     mdl->work.idScheduler = -1;
+    mdl->work.bDynamic = 0;
 
 
     /* Cancel the pending MPI_Irecv and we are done with Work management.
@@ -2320,7 +2496,7 @@ void mdlFinishWork(MDL mdl, void *pWorkList)
     free(w->pbufRcv);
     */
 
-    mdlDiag(mdl, "\nDYNAMIC SCHEDULING completed.\n\n");
+    mdlDiag(mdl, "\nWORKLOAD MANAGEMENT completed.\n\n");
 }
 
 void mdlConstructWorkRequest(MDL mdl, WORKHEAD *wh)
@@ -2403,9 +2579,19 @@ void mdlConstructWorkCheckout(MDL mdl, WORKHEAD *wh)
 }
 
 
+void *mdlRequestWorkNoDynamic(MDL mdl, void *pWorkList)
+{
+    /* This is the condition that signals there is no work left to do */
+    if (mdl->work.iNextLocalElt > mdl->work.iNextRemoteElt) return(NULL);
+    /* Otherwise, we increment iNextLocalElt to point to the next unassigned
+     * element, and return the original iNextLocalElt element. */
+    /*fprintf(stderr,"%d: iNextLocalElt=%d  iNextRemoteElt=%d\n", mdl->idSelf,
+      mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);*/
+    ++(mdl->work.iNextLocalElt);
+    return( &(mdl->work.cWorkList[(mdl->work.iNextLocalElt-1)*mdl->work.iWorkEltSize]) );
+}
 
-
-void *mdlRequestWork(MDL mdl, void *pWorkList)
+void *mdlRequestWork(MDL mdl, void *pWorkList, int *pidHome)
 {
     WORK *w = &(mdl->work);
     WORKHEAD wh, *whIn, *whiOut;
@@ -2417,10 +2603,16 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
     /* Always check that the worklist is the same */
     assert(w->cWorkList == (char *)pWorkList);
 
+    if (!(w->bDynamic)) {
+        /* Only static scheduling active */
+        return mdlRequestWorkNoDynamic(mdl, pWorkList);
+    }
+
     whIn = (WORKHEAD *) w->pbufRcv;
     wDataIn = (w->pbufRcv) + sizeof(WORKHEAD);
     whiOut = (WORKHEAD *) w->pbufISnd;
-
+    *pidHome = -1;
+    
     mdlCacheCheck(mdl);
 
     if (mdl->sch.bIAmScheduler) {
@@ -2481,6 +2673,7 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
                 p.priority = (-1) * w->nLocalWorkRemaining;
                 mdlHeap_addItem(pHeap, p);
             }
+            *pidHome = mdl->idSelf;
             return( &(mdl->work.cWorkList[(mdl->work.iNextLocalElt-1)*(mdl->work.iWorkEltSize)]) );
         }            
 
@@ -2502,6 +2695,7 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
                     mdlprintf(mdl, "sending work request to scheduler.\n");
                     mdlSendWorkRequest(mdl);
                 }
+                *pidHome = w->idRemoteWork;
                 return(paddr);
             } else {
                 /* ...And we need to acquire more remote work */
@@ -2564,6 +2758,7 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
                     return NULL;
                 } else {
                     assert(w->retIncomingWork == MDL_WORK_ASSIGN);
+                    w->idRemoteWork = w->idIncomingWork;
                     /* Copy from incoming work buffer to remote work buffer */
                     assert(w->nbufIncomingWork <= MDL_WORK_UNITS_PER_REQ);
                     w->nbufRemoteWork = w->nbufIncomingWork;
@@ -2572,7 +2767,9 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
                                             * returning in the next line) */
                     /* Re-init the incoming work buffer */
                     w->retIncomingWork = MDL_WORK_NULL;
+                    w->idIncomingWork = -1;
                     w->nbufIncomingWork = 0;
+                    *pidHome = w->idRemoteWork;
                     return(w->pbufRemoteWork); /* Return the 0th element */
                 }
             } /* Return remote work buffer or acquire new remote work buffer */
@@ -2606,6 +2803,7 @@ void *mdlRequestWork(MDL mdl, void *pWorkList)
                 mdlSendWorkUpdate(mdl);
             }
             
+            *pidHome = mdl->idSelf;
             return paddr;
         }
     } /* I am not scheduler */

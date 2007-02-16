@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
-#include <stdlib.h>
+#include <malloc.h>
 #include <math.h>
 #include <limits.h>
 #include <assert.h>
@@ -412,11 +412,45 @@ void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray,
     memcpy(pReceiveArray, pSendArray, iEltSize*nElements);
 }
 
-void mdlAllToAll(MDL mdl, void *pSendArray, void *pReceiveArray, int iEltSize)
+/* This function is simple since the result from master is written to vBuf */
+void mdlBroadcast(MDL mdl, int iRoot, void *vBuf, int iEltSize)
+{
+    return;
+}
+
+void mdlGather(MDL mdl, void *pSendElt, void *pReceiveArray, int iEltSize)
 {
     /* Copy the single memory element from p*/
-    memcpy(pReceiveArray, pSendArray,iEltSize);
+    memcpy(pReceiveArray, pSendElt, iEltSize);
 }
+
+void *mdlGatherv(MDL mdl, void *vOutElt, int *iEltInSizes, int iEltOutSize,
+                 int *piInArrayStride)
+{
+    void *inArray = NULL;
+
+    if (iEltOutSize > 0) {
+        inArray = malloc(mdl->nThreads * iEltOutSize);
+        assert(inArray != NULL);
+        memcpy(inArray, vOutElt, iEltOutSize);
+    }
+    *iEltInSizes = iEltOutSize;
+    *piInArrayStride = iEltOutSize;
+    return inArray;
+}
+
+void mdlScatter(MDL mdl, void *vOutArray, void *vInElt, int iEltSize)
+{
+    /* Copy vOutArray into vInElt */
+    memcpy(vInElt, vOutArray, iEltSize);
+}
+
+void mdlAllToAll(MDL mdl, void *pSendArray, void *pReceiveArray, int iEltSize)
+{
+    /* Identical to mdlGather for 1 thread */
+    mdlGather(mdl, pSendArray, pReceiveArray, iEltSize);
+}
+
 
 int mdlComputeEltSizeFromType(MDL mdl, int iType)
 {
@@ -445,6 +479,7 @@ int mdlComputeEltSizeFromType(MDL mdl, int iType)
     default:
         assert(1);
     }
+    return -1;
 }
 
 
@@ -601,11 +636,15 @@ double mdlMinRatio(MDL mdl,int cid)
 	else return(0.0);
 	}
 
+double mdlWaitReplace(MDL mdl, int cid) { return 0; }
+double mdlWaitFlush(MDL mdl, int cid) { return 0; }
+
+
 /*
 ** New MDL Work management functions
 */
 
-void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts)
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts, int bDynamic)
 {
     mdl->work.cWorkList           = pWorkList;
     mdl->work.iWorkEltSize        = iWorkEltSize;
@@ -620,15 +659,16 @@ void mdlFinishWork(MDL mdl, void *pWorkList)
     assert(1);
 }
 
-void *mdlRequestWork(MDL mdl, void *pWorkList)
+void *mdlRequestWork(MDL mdl, void *pWorkList, int *pidHome)
 {
     /* This is the condition that signals there is no work left to do */
     if (mdl->work.iNextLocalElt > mdl->work.iNextRemoteElt) return(NULL);
     /* Otherwise, we increment iNextLocalElt to point to the next unassigned
      * element, and return the original iNextLocalElt element. */
-    fprintf(stderr,"iNextLocalElt=%d  iNextRemoteElt=%d\n",
-            mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);
+    /*fprintf(stderr,"iNextLocalElt=%d  iNextRemoteElt=%d\n",
+      mdl->work.iNextLocalElt, mdl->work.iNextRemoteElt);*/
     ++(mdl->work.iNextLocalElt);
+    *pidHome = mdl->idSelf;
     return( &(mdl->work.cWorkList[(mdl->work.iNextLocalElt-1)*mdl->work.iWorkEltSize]) );
 }
 

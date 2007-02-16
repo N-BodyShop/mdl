@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#define MDL_VERSION_NUMBER 2.2
+#define MDL_VERSION_NUMBER 2.21
 
 #if defined(__osf__) || defined(__sgi)
 #define vsnprintf(a,b,c,d) vsprintf((a),(c),(d))
@@ -217,18 +217,25 @@ double mdlNumAccess(MDL,int);
 double mdlMissRatio(MDL,int);
 double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
+double mdlWaitReplace(MDL,int);
+double mdlWaitFlush(MDL,int);
 /* 
 ** Work management functions.
 */
-void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts);
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts, int bDynamic);
 void mdlFinishWork(MDL mdl, void *pWorkList);
-void *mdlRequestWork(MDL mdl, void *pWorkList);
+void *mdlRequestWork(MDL mdl, void *pWorkList, int *pidHome);
 /*
 ** Collectives
 */
 void mdlCollectShared(MDL mdl, void *, int);
+void mdlBroadcast(MDL mdl, int iRoot, void *vBuf, int iEltSize);
 void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
                   void *pReceiveArray, int iEltSize, int nElements);
+void mdlGather(MDL mdl, void *pSentElt, void *pReceiveArray, int iEltSize);
+void *mdlGatherv(MDL mdl, void *vOutElt, int *iEltInSizes, int iEltOutSize,
+                 int *piInArrayStride);
+void mdlScatter(MDL mdl, void *vOutArray, void *vInElt, int iEltSize);
 void mdlAllToAll(MDL mdl, void *pSendArray, void *pReceiveArray, int iEltSize);
 int mdlComputeEltSizeFromType(MDL mdl, int iType);
 

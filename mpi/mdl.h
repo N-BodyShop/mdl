@@ -4,7 +4,7 @@
 #include <assert.h>
 #include "mpi.h"
 
-#define MDL_VERSION_NUMBER 2.2
+#define MDL_VERSION_NUMBER 2.21
 
 #define SRV_STOP		0
 
@@ -13,6 +13,7 @@
 #define MDL_CACHELINE_ELTS	(1<<MDL_CACHELINE_BITS)
 #define MDL_CACHE_MASK		(MDL_CACHELINE_ELTS-1)
 #define MDL_INDEX_MASK		(~MDL_CACHE_MASK)
+
 
 /*
  * Work management structs
@@ -48,9 +49,11 @@ typedef struct workSpace {
     char *pbufRemoteWork;    /* Buffer containing previously fetched remote work assignments */
     int nbufRemoteWork;      /* Number of elements in remote work buffer */
     int ibufRemoteWork;      /* "Index" for the current element in remote work buffer */
+    int idRemoteWork;        /* The thread that the remote work came from */
     char *pbufIncomingWork;  /* Temporary buffer to store incoming work assignments */
     int nbufIncomingWork;    /* Number of elements in incoming work buffer */
     int retIncomingWork;     /* The mdlWorkReceive return code for the incoming work buffer */
+    int idIncomingWork;      /* The thread that the incoming work came from */
     /* MPI Buffers, handles, etc */
     int iBufSize;            /* Size (in bytes) of the buffer to send/receive work comms */
     char *pbufSnd;           /* Buffer for regular sends */
@@ -60,6 +63,7 @@ typedef struct workSpace {
     MPI_Request handleISnd;  /* MPI handle for Isends */
     int bRequestedMoreWork;  /* Have I send out a request for more work already? */
     int iRidCurrent;         /* The current outstanding work request ID */
+    int bDynamic;            /* Do we use dynamic load balancing or not? */
 } WORK;
 
 /* This struct is only used by the master scheduler thread.  All other
@@ -132,6 +136,9 @@ typedef struct cacheSpace {
 	long nMin;
 	int nKeyMax;
 	char *pbKey;
+    /* Timers */
+    double dTimerWaitReplace;
+    double dTimerWaitFlush;
 	} CACHE;
 
 typedef struct serviceRec {
@@ -275,6 +282,7 @@ void mdldebug( MDL mdl, const char *format, ... );
 #define mdldebugassert
 #endif
 
+/* MDL Timer struct */
 typedef struct {
   double wallclock;
   double cpu;
@@ -329,18 +337,25 @@ double mdlNumAccess(MDL,int);
 double mdlMissRatio(MDL,int);
 double mdlCollRatio(MDL,int);
 double mdlMinRatio(MDL,int);
+double mdlWaitReplace(MDL,int);
+double mdlWaitFlush(MDL,int);
 /* 
 ** Work management functions.
 */
 int  mdlWorkReceive(MDL mdl, char *pWork);
-void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts);
+void mdlInitWork(MDL mdl, void *pWorkList, int iWorkEltSize, int nWorkElts, int bDynamic);
 void mdlFinishWork(MDL mdl, void *pWorkList);
-void *mdlRequestWork(MDL mdl, void *pWorkList);
+void *mdlRequestWork(MDL mdl, void *pWorkList, int *pidHome);
 /*
 ** Collectives
 */
 int mdlComputeEltSizeFromType(MDL mdl, int iType);
 void mdlCollectShared(MDL mdl, void *, int);
+void mdlBroadcast(MDL mdl, int iRoot, void *vBuf, int iEltSize);
+void mdlGather(MDL mdl, void *vOutElt, void *vInArray, int iEltSize);
+void *mdlGatherv(MDL mdl, void *vOutElt, int *iEltInSizes, int iEltOutSize,
+                 int *piInArrayStride);
+void mdlScatter(MDL mdl, void *vOutArray, void *vInElt, int iEltSize);
 void mdlAllReduce(MDL mdl, int iType, int iReduce, void *pSendArray, 
                   void *pReceiveArray, int iEltSize, int nElements);
 void mdlAllToAll(MDL mdl, void *pScatterArray, void *pGatherArray, int iEltSize);
