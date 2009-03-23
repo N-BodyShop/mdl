@@ -198,7 +198,7 @@ void mdlHandler(MDL);
 /*
  ** Caching functions.
  */
-void *mdlMalloc(MDL,int);
+void *mdlMalloc(MDL,size_t);
 void *mdlMallocMax(MDL mdl, size_t iSize, int *iMaxSize);
 void *mdlMallocShared(MDL mdl, size_t iSize, int *iEltSize);
 void mdlFree(MDL,void *);
