@@ -134,8 +134,10 @@ typedef struct cacheSpace {
 	long nMiss;
 	long nColl;
 	long nMin;
+#ifndef NO_CACHE_STATS
 	int nKeyMax;
-	char *pbKey;
+	char *pbKey;   /* Used to keep track of unique misses */
+#endif
     /* Timers */
     double dTimerWaitReplace;
     double dTimerWaitFlush;

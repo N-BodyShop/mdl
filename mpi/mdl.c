@@ -1255,10 +1255,12 @@ CACHE *CacheInitialize(MDL mdl,int cid,void *pData,int iDataSize,int nData)
 	c->nMiss = 0;				/* !!!, not NB */
 	c->nColl = 0;				/* !!!, not NB */
 	c->nMin = 0;				/* !!!, not NB */	
+#ifndef NO_CACHE_STATS
 	c->nKeyMax = 500;				/* !!!, not NB */
 	c->pbKey = malloc(c->nKeyMax);			/* !!!, not NB */
 	assert(c->pbKey != NULL);			/* !!!, not NB */
 	for (i=0;i<c->nKeyMax;++i) c->pbKey[i] = 0;	/* !!!, not NB */
+#endif
     /* Init cache wait timers */
     c->dTimerWaitReplace = 0.;
     c->dTimerWaitFlush = 0.;
@@ -1584,7 +1586,9 @@ void mdlFinishCache(MDL mdl,int cid)
     if (c->iType != MDL_DUMCACHE) {
         free(c->pTrans);
         free(c->pTag);
+#ifndef NO_CACHE_STATS
         free(c->pbKey);
+#endif
         free(c->pLine);
     }
 	c->iType = MDL_NOCACHE;
@@ -1785,6 +1789,7 @@ GotVictim:
 	pi = &c->pTrans[iKey & c->iTransMask];
 	c->pTag[iVictim].iLink = *pi;
 	*pi = iVictim;
+#ifndef NO_CACHE_STATS
 	/*
 	 ** Figure out whether this is a "new" miss.
 	 ** This is for statistics only!
@@ -1799,7 +1804,8 @@ GotVictim:
 	if (!c->pbKey[iKey]) {
 		c->pbKey[iKey] = 1;
 		++c->nMin;
-		}								/* !!! */
+		}					/* !!! */
+#endif
 	/*
 	 ** At this point 'pLine' is the recipient cache line for the 
 	 ** data requested from processor 'id'.
