@@ -10,3 +10,6 @@ mdl.o: mdl.ci mdl.C mdl.h mdlimpl.h mdl.def.h mdl.decl.h
 
 mdl.def.h mdl.decl.h : mdl.ci
 	$(CHARMC) mdl.ci
+
+clean:
+	-rm *.o mdl.def.h mdl.decl.h
