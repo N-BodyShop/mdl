@@ -12,4 +12,4 @@ mdl.def.h mdl.decl.h : mdl.ci
 	$(CHARMC) mdl.ci
 
 clean:
-	-rm *.o mdl.def.h mdl.decl.h
+	-rm -f *.o mdl.def.h mdl.decl.h
