@@ -235,7 +235,6 @@ void mdlFinish(MDL mdl)
 	free(mdl->pszIn);
 	free(mdl->pszOut);
 	free(mdl->cache);
-	free(mdl->atid);
 	free(mdl);
 	}
 

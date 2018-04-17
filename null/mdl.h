@@ -50,7 +50,6 @@ typedef struct mdlContext {
 	int nThreads;
 	int idSelf;
 	int bDiag;
-	int *atid;
 	FILE *fpDiag;
 	/*
 	 ** Services stuff!
